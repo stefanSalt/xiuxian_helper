@@ -11,6 +11,7 @@ from .core.scheduler import Scheduler
 from .tg_adapter import TGAdapter
 from .plugins.biguan import AutoBiguanPlugin
 from .plugins.daily import DailyPlugin
+from .plugins.garden import AutoGardenPlugin
 
 
 def _setup_logging(level: str) -> logging.Logger:
@@ -71,6 +72,7 @@ async def run() -> None:
     plugins = [
         AutoBiguanPlugin(config, logger),
         DailyPlugin(config, logger),
+        AutoGardenPlugin(config, logger),
     ]
     dispatcher = Dispatcher(plugins, logger)
 
@@ -123,6 +125,9 @@ async def run() -> None:
     adapter.on_new_message(_on_event)
 
     await adapter.start()
+    if config.enable_garden:
+        # Bootstrap: send one status command so the plugin can start its poll loop.
+        await _send("garden", ".小药园", True)
     try:
         await adapter.run_forever()
     finally:

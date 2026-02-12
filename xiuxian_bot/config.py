@@ -89,6 +89,7 @@ class Config:
     # Plugin toggles (low-risk default)
     enable_biguan: bool
     enable_daily: bool
+    enable_garden: bool
 
     # Biguan timings
     biguan_extra_buffer_seconds: int
@@ -96,6 +97,11 @@ class Config:
     biguan_cooldown_jitter_max_seconds: int
     biguan_retry_jitter_min_seconds: int
     biguan_retry_jitter_max_seconds: int
+
+    # Garden (小药园)
+    garden_seed_name: str
+    garden_poll_interval_seconds: int
+    garden_action_spacing_seconds: int
 
     @staticmethod
     def load() -> "Config":
@@ -118,6 +124,7 @@ class Config:
             plugin_sends_per_minute=_get_env_int("PLUGIN_SENDS_PER_MINUTE", default=3),
             enable_biguan=_get_env_bool("ENABLE_BIGUAN", default=True),
             enable_daily=_get_env_bool("ENABLE_DAILY", default=False),
+            enable_garden=_get_env_bool("ENABLE_GARDEN", default=False),
             biguan_extra_buffer_seconds=_get_env_int("BIGUAN_EXTRA_BUFFER_SECONDS", default=60),
             biguan_cooldown_jitter_min_seconds=_get_env_int(
                 "BIGUAN_COOLDOWN_JITTER_MIN_SECONDS", default=5
@@ -131,4 +138,7 @@ class Config:
             biguan_retry_jitter_max_seconds=_get_env_int(
                 "BIGUAN_RETRY_JITTER_MAX_SECONDS", default=8
             ),
+            garden_seed_name=_get_env_str("GARDEN_SEED_NAME", default="清灵草种子"),
+            garden_poll_interval_seconds=_get_env_int("GARDEN_POLL_INTERVAL_SECONDS", default=3600),
+            garden_action_spacing_seconds=_get_env_int("GARDEN_ACTION_SPACING_SECONDS", default=25),
         )
