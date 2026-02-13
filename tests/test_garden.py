@@ -60,6 +60,7 @@ class TestGardenParser(unittest.TestCase):
         self.assertTrue(status.has_insect)
         self.assertTrue(status.has_mature)
         self.assertFalse(status.has_idle)
+        self.assertEqual(status.min_remaining_seconds, 19607)
 
     def test_parse_garden_status_idle(self) -> None:
         text = """【黄枫谷·小药园】(灵田总数: 3块)
@@ -72,9 +73,37 @@ class TestGardenParser(unittest.TestCase):
         self.assertTrue(status.has_idle)
         self.assertTrue(status.has_growing)
         self.assertFalse(status.has_mature)
+        self.assertEqual(status.min_remaining_seconds, 3600)
 
 
 class TestGardenPlugin(unittest.IsolatedAsyncioTestCase):
+    async def test_status_schedules_poll_near_maturity(self) -> None:
+        plugin = AutoGardenPlugin(_dummy_config(), logging.getLogger("test"))
+
+        text = """【黄枫谷·小药园】(灵田总数: 3块)
+1号灵田: 清灵草种子-生长中 🌱 (剩余: 14分钟)
+2号灵田: 清灵草种子-生长中 🌱 (剩余: 2小时)
+3号灵田: 清灵草种子-生长中 🌱 (剩余: 3小时)
+"""
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=9,
+            reply_to_msg_id=123,
+            sender_id=999,
+            text=text,
+            ts=datetime.now(timezone.utc),
+            is_reply=False,
+            is_reply_to_me=False,
+        )
+
+        actions = await plugin.on_message(ctx)
+        assert actions is not None
+
+        self.assertEqual(actions[0].text, ".小药园")
+        self.assertEqual(actions[0].key, "garden.poll")
+        # 14 minutes + buffer (10s) should be earlier than the base poll (3600s).
+        self.assertEqual(actions[0].delay_seconds, 850.0)
+
     async def test_status_schedules_maintenance_and_harvest(self) -> None:
         plugin = AutoGardenPlugin(_dummy_config(), logging.getLogger("test"))
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
 
 from ..config import Config
 from ..core.contracts import MessageContext, SendAction
@@ -24,6 +25,7 @@ class AutoGardenPlugin:
     _CMD_INSECT = ".除虫"
     _CMD_WEED = ".除草"
     _CMD_HARVEST = ".采药"
+    _MATURE_CHECK_BUFFER_SECONDS = 10
 
     def __init__(self, config: Config, logger: logging.Logger) -> None:
         self._config = config
@@ -43,6 +45,16 @@ class AutoGardenPlugin:
 
     def _sow_cmd(self) -> str:
         return f".播种 {self._config.garden_seed_name}"
+
+    def _next_poll_delay_seconds(self, status) -> float:
+        base = float(self._config.garden_poll_interval_seconds)
+        if status.min_remaining_seconds is None:
+            return base
+
+        # Check shortly after the earliest "剩余" should hit 0, but don't exceed the normal poll interval.
+        delay = float(status.min_remaining_seconds + self._MATURE_CHECK_BUFFER_SECONDS)
+        delay = max(1.0, min(base, delay))
+        return delay
 
     async def on_message(self, ctx: MessageContext) -> list[SendAction] | None:
         text = (ctx.text or "").strip()
@@ -93,13 +105,25 @@ class AutoGardenPlugin:
         if status is None:
             return None
 
+        poll_delay_seconds = self._next_poll_delay_seconds(status)
+        if status.min_remaining_seconds is not None and poll_delay_seconds < float(self._config.garden_poll_interval_seconds):
+            now = datetime.now()
+            eta = now + timedelta(seconds=int(status.min_remaining_seconds))
+            check_at = now + timedelta(seconds=int(poll_delay_seconds))
+            self._logger.info(
+                "garden_eta min_remaining_seconds=%s eta=%s check_at=%s",
+                status.min_remaining_seconds,
+                eta.isoformat(timespec="seconds"),
+                check_at.isoformat(timespec="seconds"),
+            )
+
         actions: list[SendAction] = [
             # Keep a single poll scheduled; the scheduler key will override older ones.
             SendAction(
                 plugin=self.name,
                 text=self._CMD_STATUS,
                 reply_to_topic=True,
-                delay_seconds=float(self._config.garden_poll_interval_seconds),
+                delay_seconds=poll_delay_seconds,
                 key="garden.poll",
             )
         ]
@@ -169,4 +193,3 @@ class AutoGardenPlugin:
             )
 
         return actions
-
