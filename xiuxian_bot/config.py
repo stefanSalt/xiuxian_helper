@@ -90,6 +90,7 @@ class Config:
     enable_biguan: bool
     enable_daily: bool
     enable_garden: bool
+    enable_zongmen: bool
 
     # Biguan timings
     biguan_extra_buffer_seconds: int
@@ -103,11 +104,28 @@ class Config:
     garden_poll_interval_seconds: int
     garden_action_spacing_seconds: int
 
+    # 宗门（日常）
+    zongmen_cmd_dianmao: str
+    zongmen_cmd_chuangong: str
+    zongmen_dianmao_time: str | None
+    zongmen_chuangong_times: str | None
+    zongmen_chuangong_xinde_text: str
+    zongmen_catch_up: bool
+    zongmen_action_spacing_seconds: int
+
     @staticmethod
     def load() -> "Config":
         _load_dotenv(Path(".env"))
 
         log_level = os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO"
+
+        enable_zongmen = _get_env_bool("ENABLE_ZONGMEN", default=False)
+        zongmen_dianmao_time = os.getenv("ZONGMEN_DIANMAO_TIME", "").strip() or None
+        zongmen_chuangong_times = os.getenv("ZONGMEN_CHUANGONG_TIMES", "").strip() or None
+        if enable_zongmen and (zongmen_dianmao_time is None or zongmen_chuangong_times is None):
+            raise ValueError(
+                "ENABLE_ZONGMEN=1 requires ZONGMEN_DIANMAO_TIME and ZONGMEN_CHUANGONG_TIMES (e.g. 09:37 and 09:38,09:40,09:43)"
+            )
 
         return Config(
             tg_api_id=_get_env_int("TG_API_ID"),
@@ -125,6 +143,7 @@ class Config:
             enable_biguan=_get_env_bool("ENABLE_BIGUAN", default=True),
             enable_daily=_get_env_bool("ENABLE_DAILY", default=False),
             enable_garden=_get_env_bool("ENABLE_GARDEN", default=False),
+            enable_zongmen=enable_zongmen,
             biguan_extra_buffer_seconds=_get_env_int("BIGUAN_EXTRA_BUFFER_SECONDS", default=60),
             biguan_cooldown_jitter_min_seconds=_get_env_int(
                 "BIGUAN_COOLDOWN_JITTER_MIN_SECONDS", default=5
@@ -141,4 +160,13 @@ class Config:
             garden_seed_name=_get_env_str("GARDEN_SEED_NAME", default="清灵草种子"),
             garden_poll_interval_seconds=_get_env_int("GARDEN_POLL_INTERVAL_SECONDS", default=3600),
             garden_action_spacing_seconds=_get_env_int("GARDEN_ACTION_SPACING_SECONDS", default=25),
+            zongmen_cmd_dianmao=_get_env_str("ZONGMEN_CMD_DIANMAO", default="宗门点卯"),
+            zongmen_cmd_chuangong=_get_env_str("ZONGMEN_CMD_CHUANGONG", default="宗门传功"),
+            zongmen_dianmao_time=zongmen_dianmao_time,
+            zongmen_chuangong_times=zongmen_chuangong_times,
+            zongmen_chuangong_xinde_text=_get_env_str(
+                "ZONGMEN_CHUANGONG_XINDE_TEXT", default="今日修行心得：稳中求进。"
+            ),
+            zongmen_catch_up=_get_env_bool("ZONGMEN_CATCH_UP", default=True),
+            zongmen_action_spacing_seconds=_get_env_int("ZONGMEN_ACTION_SPACING_SECONDS", default=20),
         )

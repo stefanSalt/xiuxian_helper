@@ -16,3 +16,6 @@ venv/
 
 # Test cache
 .pytest_cache/
+
+# Local screenshots / notes
+imgs/

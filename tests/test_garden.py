@@ -25,6 +25,7 @@ def _dummy_config(*, enable_garden: bool = True) -> Config:
         enable_biguan=False,
         enable_daily=False,
         enable_garden=enable_garden,
+        enable_zongmen=False,
         biguan_extra_buffer_seconds=60,
         biguan_cooldown_jitter_min_seconds=5,
         biguan_cooldown_jitter_max_seconds=15,
@@ -33,6 +34,13 @@ def _dummy_config(*, enable_garden: bool = True) -> Config:
         garden_seed_name="清灵草种子",
         garden_poll_interval_seconds=3600,
         garden_action_spacing_seconds=25,
+        zongmen_cmd_dianmao="宗门点卯",
+        zongmen_cmd_chuangong="宗门传功",
+        zongmen_dianmao_time=None,
+        zongmen_chuangong_times=None,
+        zongmen_chuangong_xinde_text="今日修行心得：稳中求进。",
+        zongmen_catch_up=True,
+        zongmen_action_spacing_seconds=20,
     )
 
 

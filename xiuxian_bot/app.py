@@ -12,6 +12,7 @@ from .tg_adapter import TGAdapter
 from .plugins.biguan import AutoBiguanPlugin
 from .plugins.daily import DailyPlugin
 from .plugins.garden import AutoGardenPlugin
+from .plugins.zongmen import AutoZongmenPlugin
 
 
 def _setup_logging(level: str) -> logging.Logger:
@@ -69,27 +70,59 @@ async def run() -> None:
 
     adapter = TGAdapter(config, logger)
 
+    biguan = AutoBiguanPlugin(config, logger)
+    daily = DailyPlugin(config, logger)
+    garden = AutoGardenPlugin(config, logger)
+    zongmen = AutoZongmenPlugin(config, logger)
+
     plugins = [
-        AutoBiguanPlugin(config, logger),
-        DailyPlugin(config, logger),
-        AutoGardenPlugin(config, logger),
+        biguan,
+        daily,
+        garden,
+        zongmen,
     ]
     dispatcher = Dispatcher(plugins, logger)
 
-    async def _send(plugin: str, text: str, reply_to_topic: bool) -> None:
+    async def _send(
+        plugin: str,
+        text: str,
+        reply_to_topic: bool,
+        *,
+        reply_to_msg_id: int | None = None,
+    ) -> int | None:
         reply_to_topic = bool(reply_to_topic and config.send_to_topic)
         if not limiter.allow(plugin):
             logger.warning("rate_limited plugin=%s text=%s", plugin, text)
-            return
+            return None
         if config.dry_run:
-            logger.info("dry_run plugin=%s text=%s reply_to_topic=%s", plugin, text, reply_to_topic)
-            return
+            logger.info(
+                "dry_run plugin=%s text=%s reply_to_topic=%s reply_to_msg_id=%s",
+                plugin,
+                text,
+                reply_to_topic,
+                reply_to_msg_id,
+            )
+            return None
         try:
-            await adapter.send_message(text, reply_to_topic=reply_to_topic)
+            mid = await adapter.send_message(text, reply_to_topic=reply_to_topic, reply_to_msg_id=reply_to_msg_id)
         except Exception:
-            logger.exception("send_failed plugin=%s text=%s reply_to_topic=%s", plugin, text, reply_to_topic)
-            return
-        logger.info("sent plugin=%s text=%s reply_to_topic=%s", plugin, text, reply_to_topic)
+            logger.exception(
+                "send_failed plugin=%s text=%s reply_to_topic=%s reply_to_msg_id=%s",
+                plugin,
+                text,
+                reply_to_topic,
+                reply_to_msg_id,
+            )
+            return None
+        logger.info(
+            "sent plugin=%s text=%s reply_to_topic=%s reply_to_msg_id=%s mid=%s",
+            plugin,
+            text,
+            reply_to_topic,
+            reply_to_msg_id,
+            mid,
+        )
+        return mid
 
     async def _execute_action(action) -> None:
         if action.delay_seconds and action.delay_seconds > 0:
@@ -128,6 +161,8 @@ async def run() -> None:
     if config.enable_garden:
         # Bootstrap: send one status command so the plugin can start its poll loop.
         await _send("garden", ".小药园", True)
+    if zongmen.enabled:
+        await zongmen.bootstrap(scheduler, _send)
     try:
         await adapter.run_forever()
     finally:

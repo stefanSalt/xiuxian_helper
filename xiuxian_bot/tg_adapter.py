@@ -16,6 +16,7 @@ class TGAdapter:
         self._logger = logger
         self._client = TelegramClient(config.tg_session_name, config.tg_api_id, config.tg_api_hash)
         self._me_id: int | None = None
+        self._peer = None
 
     @property
     def me_id(self) -> int | None:
@@ -30,6 +31,7 @@ class TGAdapter:
         await self._client.start()
         me = await self._client.get_me()
         self._me_id = me.id
+        self._peer = await self._client.get_input_entity(self._config.game_chat_id)
         self._logger.info("bound_user my_name=%s me_id=%s", self._config.my_name, me.id)
 
     async def run_forever(self) -> None:
@@ -38,22 +40,48 @@ class TGAdapter:
     async def stop(self) -> None:
         await self._client.disconnect()
 
-    async def send_message(self, text: str, *, reply_to_topic: bool = True) -> None:
+    def _extract_sent_message_id(self, result) -> int | None:
+        # messages.SendMessageRequest may return Updates or UpdateShortSentMessage depending on peer type.
+        msg_id = getattr(result, "id", None)
+        if isinstance(msg_id, int) and msg_id > 0:
+            return msg_id
+
+        updates = getattr(result, "updates", None)
+        if not updates:
+            return None
+        for upd in updates:
+            msg = getattr(upd, "message", None)
+            mid = getattr(msg, "id", None)
+            if isinstance(mid, int) and mid > 0:
+                return mid
+        return None
+
+    async def send_message(
+        self,
+        text: str,
+        *,
+        reply_to_topic: bool = True,
+        reply_to_msg_id: int | None = None,
+    ) -> int | None:
         if reply_to_topic and self._config.send_to_topic:
             # Send into a forum topic without replying to any specific message.
-            peer = await self._client.get_input_entity(self._config.game_chat_id)
             request = functions.messages.SendMessageRequest(
-                peer=peer,
+                peer=self._peer,
                 message=text,
                 reply_to=types.InputReplyToMessage(
-                    reply_to_msg_id=0,
+                    reply_to_msg_id=reply_to_msg_id or 0,
                     top_msg_id=self._config.topic_id,
                 ),
             )
-            await self._client(request)
-            return
+            result = await self._client(request)
+            return self._extract_sent_message_id(result)
 
-        await self._client.send_message(self._config.game_chat_id, text)
+        kwargs = {}
+        if reply_to_msg_id is not None:
+            kwargs["reply_to"] = reply_to_msg_id
+        msg = await self._client.send_message(self._config.game_chat_id, text, **kwargs)
+        mid = getattr(msg, "id", None)
+        return mid if isinstance(mid, int) and mid > 0 else None
 
     async def build_context(self, event) -> MessageContext:
         text = event.raw_text or ""
