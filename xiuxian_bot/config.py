@@ -160,8 +160,8 @@ class Config:
             garden_seed_name=_get_env_str("GARDEN_SEED_NAME", default="清灵草种子"),
             garden_poll_interval_seconds=_get_env_int("GARDEN_POLL_INTERVAL_SECONDS", default=3600),
             garden_action_spacing_seconds=_get_env_int("GARDEN_ACTION_SPACING_SECONDS", default=25),
-            zongmen_cmd_dianmao=_get_env_str("ZONGMEN_CMD_DIANMAO", default="宗门点卯"),
-            zongmen_cmd_chuangong=_get_env_str("ZONGMEN_CMD_CHUANGONG", default="宗门传功"),
+            zongmen_cmd_dianmao=_get_env_str("ZONGMEN_CMD_DIANMAO", default=".宗门点卯"),
+            zongmen_cmd_chuangong=_get_env_str("ZONGMEN_CMD_CHUANGONG", default=".宗门传功"),
             zongmen_dianmao_time=zongmen_dianmao_time,
             zongmen_chuangong_times=zongmen_chuangong_times,
             zongmen_chuangong_xinde_text=_get_env_str(
