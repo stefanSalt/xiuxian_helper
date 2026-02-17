@@ -1,6 +1,6 @@
 import logging
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from xiuxian_bot.config import Config
 from xiuxian_bot.core.contracts import MessageContext
@@ -166,6 +166,54 @@ class TestXinggongPlugin(unittest.IsolatedAsyncioTestCase):
         )
         await plugin.on_message(success)
         self.assertIsNotNone(getattr(plugin, "_qizhen_first_success_at"))
+
+    async def test_qizhen_cooldown_reply_updates_blocked_until(self) -> None:
+        plugin = AutoXinggongPlugin(_dummy_config(), logging.getLogger("test"))
+
+        start = datetime.now()
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=20,
+            reply_to_msg_id=19,
+            sender_id=999,
+            text="你刚刚参与过布阵，心神消耗巨大，请在1小时2分钟3秒后再次启阵。",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=True,
+        )
+        await plugin.on_message(ctx)
+        blocked_until = getattr(plugin, "_qizhen_blocked_until")
+        self.assertIsNotNone(blocked_until)
+        delta = (blocked_until - start).total_seconds()
+        # Remaining seconds (3723) + buffer (>=5s) with a bit of timing slack.
+        self.assertGreater(delta, 3723)
+        self.assertLess(delta, 3800)
+
+    async def test_qizhen_loop_respects_blocked_until(self) -> None:
+        plugin = AutoXinggongPlugin(_dummy_config(), logging.getLogger("test"))
+
+        scheduled: list[tuple[str, float]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                scheduled.append((key, delay_seconds))
+
+        sends: list[str] = []
+
+        async def _send(_plugin: str, text: str, _reply_to_topic: bool) -> int | None:
+            sends.append(text)
+            return None
+
+        plugin._scheduler = _FakeScheduler()  # type: ignore[attr-defined]
+        plugin._send = _send  # type: ignore[attr-defined]
+        plugin._qizhen_blocked_until = datetime.now() + timedelta(hours=10)  # type: ignore[attr-defined]
+
+        await plugin._qizhen_loop()  # type: ignore[attr-defined]
+        self.assertEqual(sends, [])
+        self.assertTrue(scheduled)
+        key, delay = scheduled[-1]
+        self.assertEqual(key, "xinggong.qizhen.loop")
+        self.assertGreater(delay, 9 * 3600)
 
 
 if __name__ == "__main__":
