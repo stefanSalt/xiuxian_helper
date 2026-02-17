@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from collections import deque
 
 from .config import Config
 from .core.dispatcher import Dispatcher
@@ -13,6 +14,22 @@ from .plugins.biguan import AutoBiguanPlugin
 from .plugins.daily import DailyPlugin
 from .plugins.garden import AutoGardenPlugin
 from .plugins.zongmen import AutoZongmenPlugin
+
+
+class _FocusFilter(logging.Filter):
+    """Only show 'interesting' info logs (commands + bot replies).
+
+    - INFO: allow only lines starting with ">>" (sent) or "<<" (received)
+    - WARNING/ERROR: always allow
+
+    Users can set LOG_LEVEL=DEBUG to see full logs.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
+        if record.levelno >= logging.WARNING:
+            return True
+        msg = record.getMessage()
+        return msg.startswith(">>") or msg.startswith("<<")
 
 
 def _setup_logging(level: str) -> logging.Logger:
@@ -31,6 +48,8 @@ def _setup_logging(level: str) -> logging.Logger:
     handler = logging.StreamHandler()
     handler.setLevel(numeric_level)
     handler.setFormatter(logging.Formatter(fmt))
+    if numeric_level >= logging.INFO and numeric_level != logging.DEBUG:
+        handler.addFilter(_FocusFilter())
     logger.handlers.clear()
     logger.addHandler(handler)
     return logger
@@ -83,6 +102,20 @@ async def run() -> None:
     ]
     dispatcher = Dispatcher(plugins, logger)
 
+    recent_sent_ids: deque[int] = deque(maxlen=50)
+    recent_sent_set: set[int] = set()
+
+    def _remember_sent(mid: int | None) -> None:
+        if mid is None:
+            return
+        if mid in recent_sent_set:
+            return
+        if len(recent_sent_ids) == recent_sent_ids.maxlen:
+            old = recent_sent_ids.popleft()
+            recent_sent_set.discard(old)
+        recent_sent_ids.append(mid)
+        recent_sent_set.add(mid)
+
     async def _send(
         plugin: str,
         text: str,
@@ -95,13 +128,7 @@ async def run() -> None:
             logger.warning("rate_limited plugin=%s text=%s", plugin, text)
             return None
         if config.dry_run:
-            logger.info(
-                "dry_run plugin=%s text=%s reply_to_topic=%s reply_to_msg_id=%s",
-                plugin,
-                text,
-                reply_to_topic,
-                reply_to_msg_id,
-            )
+            logger.info(">> %s (dry-run)", text)
             return None
         try:
             mid = await adapter.send_message(text, reply_to_topic=reply_to_topic, reply_to_msg_id=reply_to_msg_id)
@@ -114,14 +141,11 @@ async def run() -> None:
                 reply_to_msg_id,
             )
             return None
-        logger.info(
-            "sent plugin=%s text=%s reply_to_topic=%s reply_to_msg_id=%s mid=%s",
-            plugin,
-            text,
-            reply_to_topic,
-            reply_to_msg_id,
-            mid,
-        )
+        _remember_sent(mid)
+        if reply_to_msg_id is None:
+            logger.info(">> %s", text)
+        else:
+            logger.info(">> %s (reply_to=%s)", text, reply_to_msg_id)
         return mid
 
     async def _execute_action(action) -> None:
@@ -131,7 +155,7 @@ async def run() -> None:
             async def _scheduled() -> None:
                 await _send(action.plugin, action.text, action.reply_to_topic)
 
-            logger.info(
+            logger.debug(
                 "scheduled plugin=%s key=%s delay_seconds=%s text=%s",
                 action.plugin,
                 key,
@@ -147,11 +171,15 @@ async def run() -> None:
         ctx = await adapter.build_context(event)
         if not _in_scope(config, ctx.text, ctx.reply_to_msg_id, ctx.is_reply_to_me):
             return
+        if adapter.me_id is not None and ctx.sender_id != adapter.me_id:
+            # Show only messages that are very likely bot replies to our own operations.
+            if ctx.is_reply_to_me or (ctx.reply_to_msg_id in recent_sent_set) or (config.my_name in ctx.text):
+                logger.info("<< %s", _short_text(ctx.text))
 
         actions = await dispatcher.dispatch(ctx)
         if actions:
             plugins = ",".join(sorted({a.plugin for a in actions}))
-            logger.info("rx plugins=%s text=%r", plugins, _short_text(ctx.text))
+            logger.debug("rx plugins=%s text=%r", plugins, _short_text(ctx.text))
         for action in actions:
             await _execute_action(action)
 
