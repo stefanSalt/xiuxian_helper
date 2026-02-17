@@ -110,8 +110,8 @@ class TestXinggongPlugin(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(actions[0].text, ".观星台")
         self.assertEqual(actions[0].key, "xinggong.poll")
         self.assertEqual(actions[0].delay_seconds, 3600.0)
-        self.assertEqual([a.text for a in actions[1:]], [".牵引星辰 1 庚金星", ".牵引星辰 2 庚金星", ".牵引星辰 3 庚金星"])
-        self.assertEqual([a.delay_seconds for a in actions[1:]], [0.0, 25.0, 50.0])
+        self.assertEqual([a.text for a in actions[1:]], [".牵引星辰 庚金星"])
+        self.assertEqual([a.delay_seconds for a in actions[1:]], [0.0])
 
     async def test_status_abnormal_triggers_soothe(self) -> None:
         plugin = AutoXinggongPlugin(_dummy_config(), logging.getLogger("test"))

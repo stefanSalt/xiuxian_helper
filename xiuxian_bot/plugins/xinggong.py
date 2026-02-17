@@ -109,8 +109,9 @@ class AutoXinggongPlugin:
         delay = max(1.0, min(base, delay))
         return delay
 
-    def _sow_cmd(self, disk_idx: int) -> str:
-        return f".牵引星辰 {disk_idx} {self._star_name}"
+    def _sow_cmd(self) -> str:
+        # In this group, the command auto-fills all empty disks; no disk index needed.
+        return f".牵引星辰 {self._star_name}"
 
     def _parse_duration_seconds(self, text: str) -> int | None:
         # Parse "2小时16分钟27秒" into seconds.
@@ -271,7 +272,6 @@ class AutoXinggongPlugin:
         ]
 
         delay = 0.0
-        spacing = float(self._spacing_seconds)
 
         if status.abnormal_disks:
             actions.append(
@@ -297,17 +297,15 @@ class AutoXinggongPlugin:
             )
             return actions
 
-        for disk_idx in status.idle_disks:
+        if status.idle_disks:
             actions.append(
                 SendAction(
                     plugin=self.name,
-                    text=self._sow_cmd(disk_idx),
+                    text=self._sow_cmd(),
                     reply_to_topic=True,
                     delay_seconds=delay,
-                    key=f"xinggong.action.sow.{disk_idx}",
+                    key="xinggong.action.sow",
                 )
             )
-            delay += spacing
 
         return actions
-
