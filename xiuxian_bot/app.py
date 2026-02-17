@@ -13,6 +13,7 @@ from .tg_adapter import TGAdapter
 from .plugins.biguan import AutoBiguanPlugin
 from .plugins.daily import DailyPlugin
 from .plugins.garden import AutoGardenPlugin
+from .plugins.xinggong import AutoXinggongPlugin
 from .plugins.zongmen import AutoZongmenPlugin
 
 
@@ -92,12 +93,14 @@ async def run() -> None:
     biguan = AutoBiguanPlugin(config, logger)
     daily = DailyPlugin(config, logger)
     garden = AutoGardenPlugin(config, logger)
+    xinggong = AutoXinggongPlugin(config, logger)
     zongmen = AutoZongmenPlugin(config, logger)
 
     plugins = [
         biguan,
         daily,
         garden,
+        xinggong,
         zongmen,
     ]
     dispatcher = Dispatcher(plugins, logger)
@@ -173,7 +176,14 @@ async def run() -> None:
             return
         if adapter.me_id is not None and ctx.sender_id != adapter.me_id:
             # Show only messages that are very likely bot replies to our own operations.
-            if ctx.is_reply_to_me or (ctx.reply_to_msg_id in recent_sent_set) or (config.my_name in ctx.text):
+            interesting = (
+                ctx.is_reply_to_me
+                or (ctx.reply_to_msg_id in recent_sent_set)
+                or (config.my_name in ctx.text)
+                or ("周天星斗大阵" in ctx.text)
+                or ("观星台" in ctx.text)
+            )
+            if interesting:
                 logger.info("<< %s", _short_text(ctx.text))
 
         actions = await dispatcher.dispatch(ctx)
@@ -184,11 +194,16 @@ async def run() -> None:
             await _execute_action(action)
 
     adapter.on_new_message(_on_event)
+    adapter.on_message_edited(_on_event)
 
     await adapter.start()
     if config.enable_garden:
         # Bootstrap: send one status command so the plugin can start its poll loop.
         await _send("garden", ".小药园", True)
+    if xinggong.enabled:
+        # Bootstrap: send one status command so the plugin can start its poll loop.
+        await _send("xinggong", ".观星台", True)
+        await xinggong.bootstrap(scheduler, _send)
     if zongmen.enabled:
         await zongmen.bootstrap(scheduler, _send)
     try:

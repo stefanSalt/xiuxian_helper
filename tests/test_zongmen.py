@@ -26,6 +26,7 @@ def _dummy_config(*, enable_zongmen: bool = True) -> Config:
         enable_biguan=False,
         enable_daily=False,
         enable_garden=False,
+        enable_xinggong=False,
         enable_zongmen=enable_zongmen,
         biguan_extra_buffer_seconds=60,
         biguan_cooldown_jitter_min_seconds=5,
@@ -35,6 +36,12 @@ def _dummy_config(*, enable_zongmen: bool = True) -> Config:
         garden_seed_name="清灵草种子",
         garden_poll_interval_seconds=3600,
         garden_action_spacing_seconds=25,
+        xinggong_star_name="庚金星",
+        xinggong_poll_interval_seconds=3600,
+        xinggong_action_spacing_seconds=25,
+        xinggong_qizhen_start_time="07:00",
+        xinggong_qizhen_retry_interval_seconds=120,
+        xinggong_qizhen_second_offset_seconds=43500,
         zongmen_cmd_dianmao="宗门点卯",
         zongmen_cmd_chuangong="宗门传功",
         zongmen_dianmao_time="00:00",
@@ -113,4 +120,3 @@ class TestZongmenBootstrap(unittest.IsolatedAsyncioTestCase):
 
         cmds = [c for c in calls if c[1] == "宗门传功" and c[3] is not None]
         self.assertEqual(len(cmds), 3)
-

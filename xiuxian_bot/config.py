@@ -90,6 +90,7 @@ class Config:
     enable_biguan: bool
     enable_daily: bool
     enable_garden: bool
+    enable_xinggong: bool
     enable_zongmen: bool
 
     # Biguan timings
@@ -103,6 +104,14 @@ class Config:
     garden_seed_name: str
     garden_poll_interval_seconds: int
     garden_action_spacing_seconds: int
+
+    # 星宫（观星台 + 周天星斗大阵）
+    xinggong_star_name: str
+    xinggong_poll_interval_seconds: int
+    xinggong_action_spacing_seconds: int
+    xinggong_qizhen_start_time: str
+    xinggong_qizhen_retry_interval_seconds: int
+    xinggong_qizhen_second_offset_seconds: int
 
     # 宗门（日常）
     zongmen_cmd_dianmao: str
@@ -143,6 +152,7 @@ class Config:
             enable_biguan=_get_env_bool("ENABLE_BIGUAN", default=True),
             enable_daily=_get_env_bool("ENABLE_DAILY", default=False),
             enable_garden=_get_env_bool("ENABLE_GARDEN", default=False),
+            enable_xinggong=_get_env_bool("ENABLE_XINGGONG", default=False),
             enable_zongmen=enable_zongmen,
             biguan_extra_buffer_seconds=_get_env_int("BIGUAN_EXTRA_BUFFER_SECONDS", default=60),
             biguan_cooldown_jitter_min_seconds=_get_env_int(
@@ -160,6 +170,16 @@ class Config:
             garden_seed_name=_get_env_str("GARDEN_SEED_NAME", default="清灵草种子"),
             garden_poll_interval_seconds=_get_env_int("GARDEN_POLL_INTERVAL_SECONDS", default=3600),
             garden_action_spacing_seconds=_get_env_int("GARDEN_ACTION_SPACING_SECONDS", default=25),
+            xinggong_star_name=_get_env_str("XINGGONG_STAR_NAME", default="庚金星"),
+            xinggong_poll_interval_seconds=_get_env_int("XINGGONG_POLL_INTERVAL_SECONDS", default=3600),
+            xinggong_action_spacing_seconds=_get_env_int("XINGGONG_ACTION_SPACING_SECONDS", default=25),
+            xinggong_qizhen_start_time=_get_env_str("XINGGONG_QIZHEN_START_TIME", default="07:00"),
+            xinggong_qizhen_retry_interval_seconds=_get_env_int(
+                "XINGGONG_QIZHEN_RETRY_INTERVAL_SECONDS", default=120
+            ),
+            xinggong_qizhen_second_offset_seconds=_get_env_int(
+                "XINGGONG_QIZHEN_SECOND_OFFSET_SECONDS", default=43500
+            ),
             zongmen_cmd_dianmao=_get_env_str("ZONGMEN_CMD_DIANMAO", default=".宗门点卯"),
             zongmen_cmd_chuangong=_get_env_str("ZONGMEN_CMD_CHUANGONG", default=".宗门传功"),
             zongmen_dianmao_time=zongmen_dianmao_time,

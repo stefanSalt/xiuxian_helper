@@ -27,6 +27,11 @@ class TGAdapter:
         async def _wrapped(event) -> None:
             await handler(event)
 
+    def on_message_edited(self, handler) -> None:
+        @self._client.on(events.MessageEdited(chats=self._config.game_chat_id))
+        async def _wrapped(event) -> None:
+            await handler(event)
+
     async def start(self) -> None:
         await self._client.start()
         me = await self._client.get_me()
