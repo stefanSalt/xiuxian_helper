@@ -127,12 +127,25 @@ async def run() -> None:
         reply_to_msg_id: int | None = None,
     ) -> int | None:
         reply_to_topic = bool(reply_to_topic and config.send_to_topic)
-        if not limiter.allow(plugin):
-            logger.warning("rate_limited plugin=%s text=%s", plugin, text)
-            return None
         if config.dry_run:
             logger.info(">> %s (dry-run)", text)
             return None
+
+        retries = 0
+        while not limiter.allow(plugin):
+            # Never drop commands: wait until we are allowed again.
+            wait_seconds = limiter.next_allowed_in(plugin)
+            # Buffer a bit to avoid edge-of-window flakiness.
+            wait_seconds = max(0.5, wait_seconds + 0.5)
+            retries += 1
+            logger.warning(
+                "rate_limited plugin=%s retry=%s wait_seconds=%.1f text=%s",
+                plugin,
+                retries,
+                wait_seconds,
+                text,
+            )
+            await asyncio.sleep(wait_seconds)
         try:
             mid = await adapter.send_message(text, reply_to_topic=reply_to_topic, reply_to_msg_id=reply_to_msg_id)
         except Exception:
