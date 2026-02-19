@@ -18,6 +18,7 @@ class TestParsers(unittest.TestCase):
     def test_parse_lingqi_cooldown_seconds(self) -> None:
         self.assertEqual(parse_lingqi_cooldown_seconds("灵气尚未平复，请在 18秒 后再试"), 18)
         self.assertEqual(parse_lingqi_cooldown_seconds("请在 10分钟8秒 后再试（灵气尚未平复）"), 608)
+        self.assertEqual(parse_lingqi_cooldown_seconds("灵气尚未平复，无法立即再次闭关。请在 0秒 后再试。"), 0)
         self.assertIsNone(parse_lingqi_cooldown_seconds("灵气尚未平复"))
 
 
@@ -45,4 +46,3 @@ class TestScheduler(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

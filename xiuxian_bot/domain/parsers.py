@@ -24,5 +24,7 @@ def parse_lingqi_cooldown_seconds(text: str) -> int | None:
     seconds = int(match_sec.group(1)) if match_sec else 0
 
     total = minutes * 60 + seconds
-    return total if total > 0 else None
-
+    # Distinguish "0秒" (valid, should trigger an immediate retry) from "no time info".
+    if match_min is None and match_sec is None:
+        return None
+    return total
