@@ -20,6 +20,32 @@ class AutoBiguanPlugin:
     async def on_message(self, ctx: MessageContext) -> list[SendAction] | None:
         text = ctx.text
 
+        # 0) 奇遇：闭关冷却被重置 -> 立即再次闭关
+        if (
+            "冷却时间" in text
+            and "重置" in text
+            and "闭关" in text
+            and (self._config.my_name in text or ctx.is_reply_to_me)
+        ):
+            delay_seconds = random.randint(
+                self._config.biguan_retry_jitter_min_seconds,
+                self._config.biguan_retry_jitter_max_seconds,
+            )
+            self._logger.debug(
+                "biguan_reset_cooldown delay_seconds=%s reply_to_me=%s",
+                delay_seconds,
+                ctx.is_reply_to_me,
+            )
+            return [
+                SendAction(
+                    plugin=self.name,
+                    text=self._config.action_cmd_biguan,
+                    reply_to_topic=True,
+                    delay_seconds=delay_seconds,
+                    key="biguan.next",
+                )
+            ]
+
         # 1) 正常闭关冷却：打坐调息 N 分钟
         if "打坐调息" in text and (self._config.my_name in text or ctx.is_reply_to_me):
             minutes = parse_biguan_cooldown_minutes(text)
