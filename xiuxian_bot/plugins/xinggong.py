@@ -21,8 +21,10 @@ class AutoXinggongPlugin:
     _CMD_COLLECT = ".收集精华"
     _CMD_QIZHEN = ".启阵"
     _CMD_ZHUZHEN = ".助阵"
+    _CMD_WENAN = ".每日问安"
     _MATURE_CHECK_BUFFER_SECONDS = 10
     _QIZHEN_COOLDOWN_BUFFER_SECONDS = 5
+    _WENAN_INTERVAL_SECONDS = 12 * 60 * 60
 
     _HHMM_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*$")
 
@@ -140,6 +142,7 @@ class AutoXinggongPlugin:
         self._scheduler = scheduler
         self._send = send
         await self._schedule_qizhen_loop(0.0)
+        await self._schedule_wenan_loop(0.0)
 
     async def _schedule_qizhen_loop(self, delay_seconds: float) -> None:
         if self._scheduler is None:
@@ -150,6 +153,22 @@ class AutoXinggongPlugin:
             await self._qizhen_loop()
 
         await self._scheduler.schedule(key=key, delay_seconds=delay_seconds, action=_runner)
+
+    async def _schedule_wenan_loop(self, delay_seconds: float) -> None:
+        if self._scheduler is None:
+            return
+        key = "xinggong.wenan.loop"
+
+        async def _runner() -> None:
+            await self._wenan_loop()
+
+        await self._scheduler.schedule(key=key, delay_seconds=delay_seconds, action=_runner)
+
+    async def _wenan_loop(self) -> None:
+        if not self.enabled or self._send is None:
+            return
+        await self._send(self.name, self._CMD_WENAN, True)
+        await self._schedule_wenan_loop(float(self._WENAN_INTERVAL_SECONDS))
 
     async def _qizhen_loop(self) -> None:
         if not self.enabled or self._send is None:

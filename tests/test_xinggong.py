@@ -86,6 +86,23 @@ class TestXinggongParser(unittest.TestCase):
 
 
 class TestXinggongPlugin(unittest.IsolatedAsyncioTestCase):
+    async def test_bootstrap_schedules_wenan_loop(self) -> None:
+        plugin = AutoXinggongPlugin(_dummy_config(), logging.getLogger("test"))
+
+        calls: list[tuple[str, float]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                calls.append((key, delay_seconds))
+
+        async def _send(_plugin: str, _text: str, _reply_to_topic: bool) -> int | None:
+            return None
+
+        await plugin.bootstrap(_FakeScheduler(), _send)
+        keys = {k for k, _ in calls}
+        self.assertIn("xinggong.qizhen.loop", keys)
+        self.assertIn("xinggong.wenan.loop", keys)
+
     async def test_status_sows_when_idle(self) -> None:
         plugin = AutoXinggongPlugin(_dummy_config(), logging.getLogger("test"))
 
