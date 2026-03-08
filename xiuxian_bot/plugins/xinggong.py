@@ -35,6 +35,7 @@ class AutoXinggongPlugin:
         self._star_name = config.xinggong_star_name.strip() or "庚金星"
         self._poll_interval_seconds = max(60, int(config.xinggong_poll_interval_seconds))
         self._spacing_seconds = max(0, int(config.xinggong_action_spacing_seconds))
+        self._wenan_enabled = bool(config.enable_xinggong_wenan)
         self._wenan_interval_seconds = max(60, int(config.xinggong_wenan_interval_seconds))
 
         self._qizhen_hm = self._parse_hhmm(config.xinggong_qizhen_start_time)
@@ -59,12 +60,13 @@ class AutoXinggongPlugin:
 
         if self.enabled:
             self._logger.info(
-                "xinggong_plugin_enabled star=%s poll_interval_seconds=%s qizhen_start=%s retry_seconds=%s second_offset_seconds=%s wenan_interval_seconds=%s",
+                "xinggong_plugin_enabled star=%s poll_interval_seconds=%s qizhen_start=%s retry_seconds=%s second_offset_seconds=%s wenan_enabled=%s wenan_interval_seconds=%s",
                 self._star_name,
                 self._poll_interval_seconds,
                 config.xinggong_qizhen_start_time,
                 self._qizhen_retry_seconds,
                 self._qizhen_second_offset_seconds,
+                self._wenan_enabled,
                 self._wenan_interval_seconds,
             )
 
@@ -143,7 +145,8 @@ class AutoXinggongPlugin:
         self._scheduler = scheduler
         self._send = send
         await self._schedule_qizhen_loop(0.0)
-        await self._schedule_wenan_loop(0.0)
+        if self._wenan_enabled:
+            await self._schedule_wenan_loop(0.0)
 
     async def _schedule_qizhen_loop(self, delay_seconds: float) -> None:
         if self._scheduler is None:
@@ -166,7 +169,7 @@ class AutoXinggongPlugin:
         await self._scheduler.schedule(key=key, delay_seconds=delay_seconds, action=_runner)
 
     async def _wenan_loop(self) -> None:
-        if not self.enabled or self._send is None:
+        if not self.enabled or not self._wenan_enabled or self._send is None:
             return
         await self._send(self.name, self._CMD_WENAN, True)
         await self._schedule_wenan_loop(float(self._wenan_interval_seconds))

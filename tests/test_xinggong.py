@@ -8,7 +8,12 @@ from xiuxian_bot.domain.xinggong import parse_xinggong_observatory
 from xiuxian_bot.plugins.xinggong import AutoXinggongPlugin
 
 
-def _dummy_config(*, enable_xinggong: bool = True, xinggong_wenan_interval_seconds: int = 43200) -> Config:
+def _dummy_config(
+    *,
+    enable_xinggong: bool = True,
+    enable_xinggong_wenan: bool = True,
+    xinggong_wenan_interval_seconds: int = 43200,
+) -> Config:
     return Config(
         tg_api_id=1,
         tg_api_hash="hash",
@@ -52,6 +57,7 @@ def _dummy_config(*, enable_xinggong: bool = True, xinggong_wenan_interval_secon
         zongmen_chuangong_xinde_text="今日修行心得：稳中求进。",
         zongmen_catch_up=True,
         zongmen_action_spacing_seconds=20,
+        enable_xinggong_wenan=enable_xinggong_wenan,
     )
 
 
@@ -106,6 +112,26 @@ class TestXinggongPlugin(unittest.IsolatedAsyncioTestCase):
         keys = {k for k, _ in calls}
         self.assertIn("xinggong.qizhen.loop", keys)
         self.assertIn("xinggong.wenan.loop", keys)
+
+    async def test_bootstrap_skips_wenan_loop_when_disabled(self) -> None:
+        plugin = AutoXinggongPlugin(
+            _dummy_config(enable_xinggong_wenan=False),
+            logging.getLogger("test"),
+        )
+
+        calls: list[tuple[str, float]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                calls.append((key, delay_seconds))
+
+        async def _send(_plugin: str, _text: str, _reply_to_topic: bool) -> int | None:
+            return None
+
+        await plugin.bootstrap(_FakeScheduler(), _send)
+        keys = {k for k, _ in calls}
+        self.assertIn("xinggong.qizhen.loop", keys)
+        self.assertNotIn("xinggong.wenan.loop", keys)
 
     async def test_wenan_loop_uses_configured_interval(self) -> None:
         plugin = AutoXinggongPlugin(

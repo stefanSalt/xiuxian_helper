@@ -128,6 +128,9 @@ class Config:
     zongmen_catch_up: bool
     zongmen_action_spacing_seconds: int
 
+    # 星宫子功能开关
+    enable_xinggong_wenan: bool = True
+
     @staticmethod
     def load() -> "Config":
         _load_dotenv(Path(".env"))
@@ -205,4 +208,5 @@ class Config:
             ),
             zongmen_catch_up=_get_env_bool("ZONGMEN_CATCH_UP", default=True),
             zongmen_action_spacing_seconds=_get_env_int("ZONGMEN_ACTION_SPACING_SECONDS", default=20),
+            enable_xinggong_wenan=_get_env_bool("ENABLE_XINGGONG_WENAN", default=True),
         )

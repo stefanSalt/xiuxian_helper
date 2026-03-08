@@ -31,6 +31,7 @@
   - 自动助阵：检测到他人启阵邀请后自动发送 `.助阵`（无需 reply）
 - 每日问安
   - 按 `XINGGONG_WENAN_INTERVAL_SECONDS` 发送 `.每日问安`（默认 12 小时）
+  - 可用 `ENABLE_XINGGONG_WENAN=0` 单独关闭，不影响观星台/启阵/助阵
 
 ### 4) 元婴期（日常探寻 + 元婴出窍）
 插件：`yuanying`
@@ -85,6 +86,7 @@ cp .env.example .env
 - `ENABLE_BIGUAN=1`
 - `ENABLE_GARDEN=1`
 - `ENABLE_XINGGONG=1`
+- 若只想关闭星宫问安：`ENABLE_XINGGONG_WENAN=0`
 - `ENABLE_YUANYING=1`
 - `ENABLE_ZONGMEN=1`
 
