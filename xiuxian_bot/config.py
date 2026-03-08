@@ -91,6 +91,7 @@ class Config:
     enable_daily: bool
     enable_garden: bool
     enable_xinggong: bool
+    enable_yuanying: bool
     enable_zongmen: bool
 
     # Biguan timings
@@ -153,6 +154,7 @@ class Config:
             enable_daily=_get_env_bool("ENABLE_DAILY", default=False),
             enable_garden=_get_env_bool("ENABLE_GARDEN", default=False),
             enable_xinggong=_get_env_bool("ENABLE_XINGGONG", default=False),
+            enable_yuanying=_get_env_bool("ENABLE_YUANYING", default=False),
             enable_zongmen=enable_zongmen,
             biguan_extra_buffer_seconds=_get_env_int("BIGUAN_EXTRA_BUFFER_SECONDS", default=60),
             biguan_cooldown_jitter_min_seconds=_get_env_int(

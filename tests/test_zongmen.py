@@ -27,6 +27,7 @@ def _dummy_config(*, enable_zongmen: bool = True) -> Config:
         enable_daily=False,
         enable_garden=False,
         enable_xinggong=False,
+        enable_yuanying=False,
         enable_zongmen=enable_zongmen,
         biguan_extra_buffer_seconds=60,
         biguan_cooldown_jitter_min_seconds=5,

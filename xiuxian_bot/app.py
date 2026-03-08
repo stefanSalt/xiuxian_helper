@@ -14,6 +14,7 @@ from .plugins.biguan import AutoBiguanPlugin
 from .plugins.daily import DailyPlugin
 from .plugins.garden import AutoGardenPlugin
 from .plugins.xinggong import AutoXinggongPlugin
+from .plugins.yuanying import AutoYuanyingPlugin
 from .plugins.zongmen import AutoZongmenPlugin
 
 
@@ -94,6 +95,7 @@ async def run() -> None:
     daily = DailyPlugin(config, logger)
     garden = AutoGardenPlugin(config, logger)
     xinggong = AutoXinggongPlugin(config, logger)
+    yuanying = AutoYuanyingPlugin(config, logger)
     zongmen = AutoZongmenPlugin(config, logger)
 
     plugins = [
@@ -101,6 +103,7 @@ async def run() -> None:
         daily,
         garden,
         xinggong,
+        yuanying,
         zongmen,
     ]
     dispatcher = Dispatcher(plugins, logger)
@@ -217,6 +220,8 @@ async def run() -> None:
         # Bootstrap: send one status command so the plugin can start its poll loop.
         await _send("xinggong", ".观星台", True)
         await xinggong.bootstrap(scheduler, _send)
+    if yuanying.enabled:
+        await yuanying.bootstrap(scheduler, _send)
     if zongmen.enabled:
         await zongmen.bootstrap(scheduler, _send)
     try:
