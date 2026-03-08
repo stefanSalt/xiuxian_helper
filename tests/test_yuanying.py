@@ -7,7 +7,12 @@ from xiuxian_bot.core.contracts import MessageContext
 from xiuxian_bot.plugins.yuanying import AutoYuanyingPlugin
 
 
-def _dummy_config(*, enable_yuanying: bool = True) -> Config:
+def _dummy_config(
+    *,
+    enable_yuanying: bool = True,
+    yuanying_liefeng_interval_seconds: int = 43200,
+    yuanying_chuqiao_interval_seconds: int = 28800,
+) -> Config:
     return Config(
         tg_api_id=1,
         tg_api_hash="hash",
@@ -41,6 +46,9 @@ def _dummy_config(*, enable_yuanying: bool = True) -> Config:
         xinggong_qizhen_start_time="07:00",
         xinggong_qizhen_retry_interval_seconds=120,
         xinggong_qizhen_second_offset_seconds=43500,
+        xinggong_wenan_interval_seconds=43200,
+        yuanying_liefeng_interval_seconds=yuanying_liefeng_interval_seconds,
+        yuanying_chuqiao_interval_seconds=yuanying_chuqiao_interval_seconds,
         zongmen_cmd_dianmao=".宗门点卯",
         zongmen_cmd_chuangong=".宗门传功",
         zongmen_dianmao_time=None,
@@ -66,6 +74,30 @@ class TestYuanyingPlugin(unittest.IsolatedAsyncioTestCase):
         await plugin.bootstrap(_FakeScheduler(), _send)
         self.assertIn(("yuanying.liefeng.loop", 0.0), calls)
         self.assertIn(("yuanying.chuqiao.loop", 0.0), calls)
+
+    async def test_loops_use_configured_intervals(self) -> None:
+        plugin = AutoYuanyingPlugin(
+            _dummy_config(
+                yuanying_liefeng_interval_seconds=999,
+                yuanying_chuqiao_interval_seconds=555,
+            ),
+            logging.getLogger("test"),
+        )
+        calls: list[tuple[str, float]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                calls.append((key, delay_seconds))
+
+        async def _send(_plugin: str, _text: str, _reply_to_topic: bool) -> int | None:
+            return None
+
+        plugin._scheduler = _FakeScheduler()  # type: ignore[attr-defined]
+        plugin._send = _send  # type: ignore[attr-defined]
+        await plugin._liefeng_loop()  # type: ignore[attr-defined]
+        await plugin._chuqiao_loop()  # type: ignore[attr-defined]
+        self.assertIn(("yuanying.liefeng.loop", 999.0), calls)
+        self.assertIn(("yuanying.chuqiao.loop", 555.0), calls)
 
     async def test_liefeng_cooldown_updates_next_time(self) -> None:
         plugin = AutoYuanyingPlugin(_dummy_config(), logging.getLogger("test"))

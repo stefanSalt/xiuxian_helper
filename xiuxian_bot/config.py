@@ -113,6 +113,11 @@ class Config:
     xinggong_qizhen_start_time: str
     xinggong_qizhen_retry_interval_seconds: int
     xinggong_qizhen_second_offset_seconds: int
+    xinggong_wenan_interval_seconds: int
+
+    # 元婴期（日常）
+    yuanying_liefeng_interval_seconds: int
+    yuanying_chuqiao_interval_seconds: int
 
     # 宗门（日常）
     zongmen_cmd_dianmao: str
@@ -181,6 +186,15 @@ class Config:
             ),
             xinggong_qizhen_second_offset_seconds=_get_env_int(
                 "XINGGONG_QIZHEN_SECOND_OFFSET_SECONDS", default=43500
+            ),
+            xinggong_wenan_interval_seconds=_get_env_int(
+                "XINGGONG_WENAN_INTERVAL_SECONDS", default=43200
+            ),
+            yuanying_liefeng_interval_seconds=_get_env_int(
+                "YUANYING_LIEFENG_INTERVAL_SECONDS", default=43200
+            ),
+            yuanying_chuqiao_interval_seconds=_get_env_int(
+                "YUANYING_CHUQIAO_INTERVAL_SECONDS", default=28800
             ),
             zongmen_cmd_dianmao=_get_env_str("ZONGMEN_CMD_DIANMAO", default=".宗门点卯"),
             zongmen_cmd_chuangong=_get_env_str("ZONGMEN_CMD_CHUANGONG", default=".宗门传功"),

@@ -20,8 +20,6 @@ class AutoYuanyingPlugin:
 
     _CMD_LIEFENG = ".探寻裂缝"
     _CMD_CHUQIAO = ".元婴出窍"
-    _LIEFENG_INTERVAL_SECONDS = 12 * 60 * 60
-    _CHUQIAO_INTERVAL_SECONDS = 8 * 60 * 60
     _BUFFER_SECONDS = 5
     _RETRY_DELAY_SECONDS = 5
 
@@ -34,12 +32,14 @@ class AutoYuanyingPlugin:
         self._send: SendFn | None = None
         self._liefeng_blocked_until: datetime | None = None
         self._chuqiao_blocked_until: datetime | None = None
+        self._liefeng_interval_seconds = max(60, int(config.yuanying_liefeng_interval_seconds))
+        self._chuqiao_interval_seconds = max(60, int(config.yuanying_chuqiao_interval_seconds))
 
         if self.enabled:
             self._logger.info(
                 "yuanying_plugin_enabled liefeng_interval_seconds=%s chuqiao_interval_seconds=%s",
-                self._LIEFENG_INTERVAL_SECONDS,
-                self._CHUQIAO_INTERVAL_SECONDS,
+                self._liefeng_interval_seconds,
+                self._chuqiao_interval_seconds,
             )
 
     def _is_mine(self, ctx: MessageContext, text: str) -> bool:
@@ -101,7 +101,7 @@ class AutoYuanyingPlugin:
             return
 
         await self._send(self.name, self._CMD_LIEFENG, True)
-        await self._schedule_liefeng_loop(float(self._LIEFENG_INTERVAL_SECONDS))
+        await self._schedule_liefeng_loop(float(self._liefeng_interval_seconds))
 
     async def _chuqiao_loop(self) -> None:
         if not self.enabled or self._send is None:
@@ -113,7 +113,7 @@ class AutoYuanyingPlugin:
             return
 
         await self._send(self.name, self._CMD_CHUQIAO, True)
-        await self._schedule_chuqiao_loop(float(self._CHUQIAO_INTERVAL_SECONDS))
+        await self._schedule_chuqiao_loop(float(self._chuqiao_interval_seconds))
 
     async def _set_liefeng_next(self, delay_seconds: float) -> None:
         self._liefeng_blocked_until = datetime.now() + timedelta(seconds=delay_seconds)
@@ -138,7 +138,7 @@ class AutoYuanyingPlugin:
             return None
 
         if "探寻成功" in text:
-            await self._set_liefeng_next(float(self._LIEFENG_INTERVAL_SECONDS))
+            await self._set_liefeng_next(float(self._liefeng_interval_seconds))
             return None
 
         if "元婴遁逃" in text and "虚弱期" in text:
@@ -160,7 +160,7 @@ class AutoYuanyingPlugin:
             ]
 
         if "它将在外云游8小时" in text or "下一次发言时若已归来" in text:
-            await self._set_chuqiao_next(float(self._CHUQIAO_INTERVAL_SECONDS))
+            await self._set_chuqiao_next(float(self._chuqiao_interval_seconds))
             return None
 
         if "元神出窍" in text and "无法分身" in text:

@@ -8,7 +8,7 @@ from xiuxian_bot.domain.xinggong import parse_xinggong_observatory
 from xiuxian_bot.plugins.xinggong import AutoXinggongPlugin
 
 
-def _dummy_config(*, enable_xinggong: bool = True) -> Config:
+def _dummy_config(*, enable_xinggong: bool = True, xinggong_wenan_interval_seconds: int = 43200) -> Config:
     return Config(
         tg_api_id=1,
         tg_api_hash="hash",
@@ -42,6 +42,9 @@ def _dummy_config(*, enable_xinggong: bool = True) -> Config:
         xinggong_qizhen_start_time="07:00",
         xinggong_qizhen_retry_interval_seconds=120,
         xinggong_qizhen_second_offset_seconds=43500,
+        xinggong_wenan_interval_seconds=xinggong_wenan_interval_seconds,
+        yuanying_liefeng_interval_seconds=43200,
+        yuanying_chuqiao_interval_seconds=28800,
         zongmen_cmd_dianmao=".宗门点卯",
         zongmen_cmd_chuangong=".宗门传功",
         zongmen_dianmao_time=None,
@@ -103,6 +106,26 @@ class TestXinggongPlugin(unittest.IsolatedAsyncioTestCase):
         keys = {k for k, _ in calls}
         self.assertIn("xinggong.qizhen.loop", keys)
         self.assertIn("xinggong.wenan.loop", keys)
+
+    async def test_wenan_loop_uses_configured_interval(self) -> None:
+        plugin = AutoXinggongPlugin(
+            _dummy_config(xinggong_wenan_interval_seconds=777),
+            logging.getLogger("test"),
+        )
+
+        calls: list[tuple[str, float]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                calls.append((key, delay_seconds))
+
+        async def _send(_plugin: str, _text: str, _reply_to_topic: bool) -> int | None:
+            return None
+
+        plugin._scheduler = _FakeScheduler()  # type: ignore[attr-defined]
+        plugin._send = _send  # type: ignore[attr-defined]
+        await plugin._wenan_loop()  # type: ignore[attr-defined]
+        self.assertIn(("xinggong.wenan.loop", 777.0), calls)
 
     async def test_status_sows_when_idle(self) -> None:
         plugin = AutoXinggongPlugin(_dummy_config(), logging.getLogger("test"))
