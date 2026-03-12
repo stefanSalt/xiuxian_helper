@@ -22,8 +22,13 @@ class AutoXinggongPlugin:
     _CMD_QIZHEN = ".启阵"
     _CMD_ZHUZHEN = ".助阵"
     _CMD_WENAN = ".每日问安"
+    _CMD_VIEW_BIGUAN = ".查看闭关"
+    _CMD_DEEP_BIGUAN = ".深度闭关"
+    _CMD_FORCE_EXIT = ".强行出关"
     _MATURE_CHECK_BUFFER_SECONDS = 10
     _QIZHEN_COOLDOWN_BUFFER_SECONDS = 5
+    _DEEP_BIGUAN_REFRESH_DELAY_SECONDS = 5 * 3600
+    _STATUS_REPLY_WINDOW_SECONDS = 120
 
     _HHMM_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*$")
 
@@ -36,6 +41,7 @@ class AutoXinggongPlugin:
         self._poll_interval_seconds = max(60, int(config.xinggong_poll_interval_seconds))
         self._spacing_seconds = max(0, int(config.xinggong_action_spacing_seconds))
         self._wenan_enabled = bool(config.enable_xinggong_wenan)
+        self._deep_biguan_enabled = bool(config.enable_xinggong_deep_biguan)
         self._wenan_interval_seconds = max(60, int(config.xinggong_wenan_interval_seconds))
 
         self._qizhen_hm = self._parse_hhmm(config.xinggong_qizhen_start_time)
@@ -57,16 +63,20 @@ class AutoXinggongPlugin:
         self._qizhen_last_sent_at: datetime | None = None
 
         self._assist_blocked_until: datetime | None = None
+        self._deep_biguan_status_msg_id: int | None = None
+        self._deep_biguan_status_requested_at: datetime | None = None
+        self._deep_biguan_status_reason: str | None = None
 
         if self.enabled:
             self._logger.info(
-                "xinggong_plugin_enabled star=%s poll_interval_seconds=%s qizhen_start=%s retry_seconds=%s second_offset_seconds=%s wenan_enabled=%s wenan_interval_seconds=%s",
+                "xinggong_plugin_enabled star=%s poll_interval_seconds=%s qizhen_start=%s retry_seconds=%s second_offset_seconds=%s wenan_enabled=%s deep_biguan_enabled=%s wenan_interval_seconds=%s",
                 self._star_name,
                 self._poll_interval_seconds,
                 config.xinggong_qizhen_start_time,
                 self._qizhen_retry_seconds,
                 self._qizhen_second_offset_seconds,
                 self._wenan_enabled,
+                self._deep_biguan_enabled,
                 self._wenan_interval_seconds,
             )
 
@@ -109,6 +119,7 @@ class AutoXinggongPlugin:
         self._qizhen_last_invite_msg_id = None
         self._qizhen_last_invite_slot = None
         self._assist_blocked_until = None
+        self._clear_pending_biguan_status()
 
     def _next_poll_delay_seconds(self, status) -> float:
         base = float(self._poll_interval_seconds)
@@ -138,6 +149,56 @@ class AutoXinggongPlugin:
         seconds = _pick("秒")
         total = days * 86400 + hours * 3600 + minutes * 60 + seconds
         return total if total > 0 else None
+
+    def _clear_pending_biguan_status(self) -> None:
+        self._deep_biguan_status_msg_id = None
+        self._deep_biguan_status_requested_at = None
+        self._deep_biguan_status_reason = None
+
+    def _parse_deep_biguan_status(self, text: str) -> str | None:
+        if "你并未处于深度闭关之中" in text:
+            return "inactive"
+        if "你正在深度闭关" in text:
+            return "active"
+        return None
+
+    def _is_deep_biguan_status_reply(self, ctx: MessageContext, text: str, now: datetime) -> bool:
+        requested_at = self._deep_biguan_status_requested_at
+        if self._deep_biguan_status_reason is None or requested_at is None:
+            return False
+        if (now - requested_at).total_seconds() > self._STATUS_REPLY_WINDOW_SECONDS:
+            self._clear_pending_biguan_status()
+            return False
+        if self._deep_biguan_status_msg_id is not None and ctx.reply_to_msg_id == self._deep_biguan_status_msg_id:
+            return True
+        return bool(ctx.is_reply_to_me and self._parse_deep_biguan_status(text) is not None)
+
+    async def _schedule_deep_biguan_status_check(
+        self,
+        delay_seconds: float,
+        *,
+        key: str,
+        reason: str,
+    ) -> None:
+        if self._scheduler is None:
+            return
+
+        async def _runner() -> None:
+            await self._deep_biguan_status_loop(reason)
+
+        await self._scheduler.schedule(key=key, delay_seconds=delay_seconds, action=_runner)
+
+    async def _deep_biguan_status_loop(self, reason: str) -> None:
+        if not self.enabled or not self._deep_biguan_enabled or self._send is None:
+            return
+        requested_at = datetime.now()
+        msg_id = await self._send(self.name, self._CMD_VIEW_BIGUAN, True)
+        if msg_id is None:
+            self._clear_pending_biguan_status()
+            return
+        self._deep_biguan_status_requested_at = requested_at
+        self._deep_biguan_status_msg_id = msg_id
+        self._deep_biguan_status_reason = reason
 
     async def bootstrap(self, scheduler: Scheduler, send) -> None:
         if not self.enabled:
@@ -284,6 +345,49 @@ class AutoXinggongPlugin:
                 # Recompute the schedule immediately (cancels pending retries via key override).
                 if self._scheduler is not None:
                     await self._schedule_qizhen_loop(0.0)
+                    if self._deep_biguan_enabled:
+                        await self._schedule_deep_biguan_status_check(
+                            0.0,
+                            key="xinggong.deep_biguan.status.now",
+                            reason="qizhen_success",
+                        )
+                        await self._schedule_deep_biguan_status_check(
+                            float(self._DEEP_BIGUAN_REFRESH_DELAY_SECONDS),
+                            key="xinggong.deep_biguan.status.midpoint",
+                            reason="midpoint",
+                        )
+            return None
+
+        if self._deep_biguan_enabled and self._is_deep_biguan_status_reply(ctx, text, now):
+            status = self._parse_deep_biguan_status(text)
+            self._clear_pending_biguan_status()
+            if status == "inactive":
+                return [
+                    SendAction(
+                        plugin=self.name,
+                        text=self._CMD_DEEP_BIGUAN,
+                        reply_to_topic=True,
+                        delay_seconds=0.0,
+                        key="xinggong.deep_biguan.enter",
+                    )
+                ]
+            if status == "active":
+                return [
+                    SendAction(
+                        plugin=self.name,
+                        text=self._CMD_FORCE_EXIT,
+                        reply_to_topic=True,
+                        delay_seconds=0.0,
+                        key="xinggong.deep_biguan.exit",
+                    ),
+                    SendAction(
+                        plugin=self.name,
+                        text=self._CMD_DEEP_BIGUAN,
+                        reply_to_topic=True,
+                        delay_seconds=float(self._spacing_seconds),
+                        key="xinggong.deep_biguan.enter",
+                    ),
+                ]
             return None
 
         # ---- 观星台：动作回包（安抚/收集） -> 立即复查状态 ----

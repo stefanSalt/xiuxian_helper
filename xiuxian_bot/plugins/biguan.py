@@ -15,7 +15,10 @@ class AutoBiguanPlugin:
     def __init__(self, config: Config, logger: logging.Logger) -> None:
         self._config = config
         self._logger = logger
-        self.enabled = config.enable_biguan
+        self.enabled = bool(
+            config.enable_biguan
+            and not (config.enable_xinggong and config.enable_xinggong_deep_biguan)
+        )
 
     async def on_message(self, ctx: MessageContext) -> list[SendAction] | None:
         text = ctx.text

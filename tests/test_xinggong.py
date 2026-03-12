@@ -12,6 +12,7 @@ def _dummy_config(
     *,
     enable_xinggong: bool = True,
     enable_xinggong_wenan: bool = True,
+    enable_xinggong_deep_biguan: bool = False,
     xinggong_wenan_interval_seconds: int = 43200,
 ) -> Config:
     return Config(
@@ -58,6 +59,7 @@ def _dummy_config(
         zongmen_catch_up=True,
         zongmen_action_spacing_seconds=20,
         enable_xinggong_wenan=enable_xinggong_wenan,
+        enable_xinggong_deep_biguan=enable_xinggong_deep_biguan,
     )
 
 
@@ -255,6 +257,90 @@ class TestXinggongPlugin(unittest.IsolatedAsyncioTestCase):
         # Remaining seconds (3723) + buffer (>=5s) with a bit of timing slack.
         self.assertGreater(delta, 3723)
         self.assertLess(delta, 3800)
+
+    async def test_qizhen_success_schedules_deep_biguan_checks_when_enabled(self) -> None:
+        plugin = AutoXinggongPlugin(
+            _dummy_config(enable_xinggong_deep_biguan=True),
+            logging.getLogger("test"),
+        )
+
+        calls: list[tuple[str, float]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                calls.append((key, delay_seconds))
+
+        plugin._scheduler = _FakeScheduler()  # type: ignore[attr-defined]
+        now = datetime.now()
+        setattr(plugin, "_cycle_date", plugin._cycle_date_for(now))  # type: ignore[attr-defined]
+        setattr(plugin, "_qizhen_pending_slot", 1)
+        setattr(plugin, "_qizhen_last_invite_msg_id", 88)
+
+        success = MessageContext(
+            chat_id=-100,
+            message_id=88,
+            reply_to_msg_id=123,
+            sender_id=999,
+            text="【周天星斗大阵-成】星光汇聚，大阵已成!",
+            ts=datetime.now(timezone.utc),
+            is_reply=False,
+            is_reply_to_me=False,
+        )
+        await plugin.on_message(success)
+        self.assertIn(("xinggong.qizhen.loop", 0.0), calls)
+        self.assertIn(("xinggong.deep_biguan.status.now", 0.0), calls)
+        self.assertIn(("xinggong.deep_biguan.status.midpoint", 18000.0), calls)
+
+    async def test_biguan_status_reply_enters_deep_biguan_when_inactive(self) -> None:
+        plugin = AutoXinggongPlugin(
+            _dummy_config(enable_xinggong_deep_biguan=True),
+            logging.getLogger("test"),
+        )
+        now = datetime.now()
+        setattr(plugin, "_cycle_date", plugin._cycle_date_for(now))  # type: ignore[attr-defined]
+        setattr(plugin, "_deep_biguan_status_reason", "qizhen_success")
+        setattr(plugin, "_deep_biguan_status_requested_at", now)
+        setattr(plugin, "_deep_biguan_status_msg_id", 55)
+
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=56,
+            reply_to_msg_id=55,
+            sender_id=999,
+            text="你并未处于深度闭关之中",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=False,
+        )
+        actions = await plugin.on_message(ctx)
+        assert actions is not None
+        self.assertEqual([a.text for a in actions], [".深度闭关"])
+
+    async def test_biguan_status_reply_restarts_deep_biguan_when_active(self) -> None:
+        plugin = AutoXinggongPlugin(
+            _dummy_config(enable_xinggong_deep_biguan=True),
+            logging.getLogger("test"),
+        )
+        now = datetime.now()
+        setattr(plugin, "_cycle_date", plugin._cycle_date_for(now))  # type: ignore[attr-defined]
+        setattr(plugin, "_deep_biguan_status_reason", "midpoint")
+        setattr(plugin, "_deep_biguan_status_requested_at", now)
+        setattr(plugin, "_deep_biguan_status_msg_id", 66)
+
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=67,
+            reply_to_msg_id=66,
+            sender_id=999,
+            text="你正在深度闭关，预计还需 4小时59分钟58秒即可功成圆满。",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=False,
+        )
+        actions = await plugin.on_message(ctx)
+        assert actions is not None
+        self.assertEqual([a.text for a in actions], [".强行出关", ".深度闭关"])
+        self.assertEqual(actions[1].delay_seconds, 25.0)
 
     async def test_qizhen_loop_respects_blocked_until(self) -> None:
         plugin = AutoXinggongPlugin(_dummy_config(), logging.getLogger("test"))

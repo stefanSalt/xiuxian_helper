@@ -7,7 +7,12 @@ from xiuxian_bot.core.contracts import MessageContext
 from xiuxian_bot.plugins.biguan import AutoBiguanPlugin
 
 
-def _dummy_config(*, enable_biguan: bool = True) -> Config:
+def _dummy_config(
+    *,
+    enable_biguan: bool = True,
+    enable_xinggong: bool = False,
+    enable_xinggong_deep_biguan: bool = False,
+) -> Config:
     return Config(
         tg_api_id=1,
         tg_api_hash="hash",
@@ -24,7 +29,7 @@ def _dummy_config(*, enable_biguan: bool = True) -> Config:
         enable_biguan=enable_biguan,
         enable_daily=False,
         enable_garden=False,
-        enable_xinggong=False,
+        enable_xinggong=enable_xinggong,
         enable_yuanying=False,
         enable_zongmen=False,
         biguan_extra_buffer_seconds=60,
@@ -51,10 +56,22 @@ def _dummy_config(*, enable_biguan: bool = True) -> Config:
         zongmen_chuangong_xinde_text="宗门传功",
         zongmen_catch_up=True,
         zongmen_action_spacing_seconds=20,
+        enable_xinggong_deep_biguan=enable_xinggong_deep_biguan,
     )
 
 
 class TestBiguanPlugin(unittest.IsolatedAsyncioTestCase):
+    def test_disabled_when_xinggong_deep_biguan_enabled(self) -> None:
+        plugin = AutoBiguanPlugin(
+            _dummy_config(
+                enable_biguan=True,
+                enable_xinggong=True,
+                enable_xinggong_deep_biguan=True,
+            ),
+            logging.getLogger("test"),
+        )
+        self.assertFalse(plugin.enabled)
+
     async def test_reset_cooldown_triggers_immediate_retry(self) -> None:
         plugin = AutoBiguanPlugin(_dummy_config(), logging.getLogger("test"))
 
