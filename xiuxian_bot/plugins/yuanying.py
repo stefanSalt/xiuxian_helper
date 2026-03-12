@@ -20,8 +20,12 @@ class AutoYuanyingPlugin:
 
     _CMD_LIEFENG = ".探寻裂缝"
     _CMD_CHUQIAO = ".元婴出窍"
+    _CMD_CHUQIAO_STATUS = ".元婴状态"
+    _CMD_CHUQIAO_SETTLE = "归来"
     _BUFFER_SECONDS = 5
     _RETRY_DELAY_SECONDS = 5
+    _STATUS_RETRY_SECONDS = 120
+    _SUMMARY_RECHECK_SECONDS = 15
 
     def __init__(self, config: Config, logger: logging.Logger) -> None:
         self._config = config
@@ -32,6 +36,7 @@ class AutoYuanyingPlugin:
         self._send: SendFn | None = None
         self._liefeng_blocked_until: datetime | None = None
         self._chuqiao_blocked_until: datetime | None = None
+        self._chuqiao_waiting_settle = False
         self._liefeng_interval_seconds = max(60, int(config.yuanying_liefeng_interval_seconds))
         self._chuqiao_interval_seconds = max(60, int(config.yuanying_chuqiao_interval_seconds))
 
@@ -46,16 +51,28 @@ class AutoYuanyingPlugin:
         return bool(ctx.is_reply_to_me or (self._config.my_name and self._config.my_name in text))
 
     def _parse_duration_seconds(self, text: str) -> int | None:
+        matched = False
+
         def _pick(unit: str) -> int:
+            nonlocal matched
             match = re.search(rf"(\d+)\s*{unit}", text)
-            return int(match.group(1)) if match else 0
+            if match:
+                matched = True
+                return int(match.group(1))
+            return 0
 
         days = _pick("天")
         hours = _pick("小时")
         minutes = _pick("分钟")
         seconds = _pick("秒")
-        total = days * 86400 + hours * 3600 + minutes * 60 + seconds
-        return total if total > 0 else None
+        if not matched:
+            return None
+        return days * 86400 + hours * 3600 + minutes * 60 + seconds
+
+    def _parse_chuqiao_status_remaining(self, text: str) -> int | None:
+        if "状态:元神出窍" not in text or "归来倒计时:" not in text:
+            return None
+        return self._parse_duration_seconds(text)
 
     async def bootstrap(self, scheduler: Scheduler, send: SendFn) -> None:
         if not self.enabled:
@@ -112,8 +129,14 @@ class AutoYuanyingPlugin:
             await self._schedule_chuqiao_loop((self._chuqiao_blocked_until - now).total_seconds())
             return
 
-        await self._send(self.name, self._CMD_CHUQIAO, True)
-        await self._schedule_chuqiao_loop(float(self._chuqiao_interval_seconds))
+        if self._chuqiao_waiting_settle:
+            await self._send(self.name, self._CMD_CHUQIAO_SETTLE, True)
+            self._chuqiao_waiting_settle = False
+            await self._schedule_chuqiao_loop(float(self._SUMMARY_RECHECK_SECONDS))
+            return
+
+        await self._send(self.name, self._CMD_CHUQIAO_STATUS, True)
+        await self._schedule_chuqiao_loop(float(self._STATUS_RETRY_SECONDS))
 
     async def _set_liefeng_next(self, delay_seconds: float) -> None:
         self._liefeng_blocked_until = datetime.now() + timedelta(seconds=delay_seconds)
@@ -159,11 +182,52 @@ class AutoYuanyingPlugin:
                 )
             ]
 
+        remaining = self._parse_chuqiao_status_remaining(text)
+        if remaining is not None:
+            self._chuqiao_waiting_settle = True
+            await self._set_chuqiao_next(float(remaining + self._BUFFER_SECONDS))
+            return None
+
+        if "状态:窍中温养" in text:
+            self._chuqiao_waiting_settle = False
+            self._chuqiao_blocked_until = None
+            return [
+                SendAction(
+                    plugin=self.name,
+                    text=self._CMD_CHUQIAO,
+                    reply_to_topic=True,
+                    delay_seconds=0.0,
+                    key="yuanying.action.chuqiao",
+                )
+            ]
+
+        if "元神归窍总结" in text:
+            self._chuqiao_waiting_settle = False
+            self._chuqiao_blocked_until = None
+            return [
+                SendAction(
+                    plugin=self.name,
+                    text=self._CMD_CHUQIAO,
+                    reply_to_topic=True,
+                    delay_seconds=0.0,
+                    key="yuanying.action.chuqiao",
+                )
+            ]
+
         if "它将在外云游8小时" in text or "下一次发言时若已归来" in text:
+            self._chuqiao_waiting_settle = True
             await self._set_chuqiao_next(float(self._chuqiao_interval_seconds))
             return None
 
         if "元神出窍" in text and "无法分身" in text:
-            return None
+            return [
+                SendAction(
+                    plugin=self.name,
+                    text=self._CMD_CHUQIAO_STATUS,
+                    reply_to_topic=True,
+                    delay_seconds=0.0,
+                    key="yuanying.action.chuqiao.status",
+                )
+            ]
 
         return None

@@ -75,7 +75,7 @@ class TestYuanyingPlugin(unittest.IsolatedAsyncioTestCase):
         self.assertIn(("yuanying.liefeng.loop", 0.0), calls)
         self.assertIn(("yuanying.chuqiao.loop", 0.0), calls)
 
-    async def test_loops_use_configured_intervals(self) -> None:
+    async def test_loops_use_expected_intervals(self) -> None:
         plugin = AutoYuanyingPlugin(
             _dummy_config(
                 yuanying_liefeng_interval_seconds=999,
@@ -84,12 +84,14 @@ class TestYuanyingPlugin(unittest.IsolatedAsyncioTestCase):
             logging.getLogger("test"),
         )
         calls: list[tuple[str, float]] = []
+        sends: list[str] = []
 
         class _FakeScheduler:
             async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
                 calls.append((key, delay_seconds))
 
-        async def _send(_plugin: str, _text: str, _reply_to_topic: bool) -> int | None:
+        async def _send(_plugin: str, text: str, _reply_to_topic: bool) -> int | None:
+            sends.append(text)
             return None
 
         plugin._scheduler = _FakeScheduler()  # type: ignore[attr-defined]
@@ -97,7 +99,8 @@ class TestYuanyingPlugin(unittest.IsolatedAsyncioTestCase):
         await plugin._liefeng_loop()  # type: ignore[attr-defined]
         await plugin._chuqiao_loop()  # type: ignore[attr-defined]
         self.assertIn(("yuanying.liefeng.loop", 999.0), calls)
-        self.assertIn(("yuanying.chuqiao.loop", 555.0), calls)
+        self.assertIn(("yuanying.chuqiao.loop", 120.0), calls)
+        self.assertEqual(sends[-1], ".元婴状态")
 
     async def test_liefeng_cooldown_updates_next_time(self) -> None:
         plugin = AutoYuanyingPlugin(_dummy_config(), logging.getLogger("test"))
@@ -156,6 +159,60 @@ class TestYuanyingPlugin(unittest.IsolatedAsyncioTestCase):
         delta = (blocked_until - start).total_seconds()
         self.assertGreater(delta, 8 * 3600 - 5)
         self.assertLess(delta, 8 * 3600 + 10)
+        self.assertTrue(getattr(plugin, "_chuqiao_waiting_settle"))
+
+    async def test_chuqiao_status_reply_syncs_remaining_time(self) -> None:
+        plugin = AutoYuanyingPlugin(_dummy_config(), logging.getLogger("test"))
+        start = datetime.now()
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=31,
+            reply_to_msg_id=30,
+            sender_id=999,
+            text="【元婴状态】状态:元神出窍 归来倒计时:6小时50分钟30秒",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=True,
+        )
+        await plugin.on_message(ctx)
+        blocked_until = getattr(plugin, "_chuqiao_blocked_until")
+        self.assertIsNotNone(blocked_until)
+        delta = (blocked_until - start).total_seconds()
+        self.assertGreater(delta, 6 * 3600)
+        self.assertLess(delta, 7 * 3600)
+        self.assertTrue(getattr(plugin, "_chuqiao_waiting_settle"))
+
+    async def test_chuqiao_status_wenyang_restarts_chuqiao(self) -> None:
+        plugin = AutoYuanyingPlugin(_dummy_config(), logging.getLogger("test"))
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=32,
+            reply_to_msg_id=30,
+            sender_id=999,
+            text="【元婴状态】状态:窍中温养",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=True,
+        )
+        actions = await plugin.on_message(ctx)
+        assert actions is not None
+        self.assertEqual([a.text for a in actions], [".元婴出窍"])
+
+    async def test_chuqiao_summary_restarts_immediately(self) -> None:
+        plugin = AutoYuanyingPlugin(_dummy_config(), logging.getLogger("test"))
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=33,
+            reply_to_msg_id=30,
+            sender_id=999,
+            text="【元神归窍总结】你的元婴满载而归，为你带来了诸多机缘。",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=True,
+        )
+        actions = await plugin.on_message(ctx)
+        assert actions is not None
+        self.assertEqual([a.text for a in actions], [".元婴出窍"])
 
     async def test_liefeng_weakness_waits_for_recovery(self) -> None:
         plugin = AutoYuanyingPlugin(_dummy_config(), logging.getLogger("test"))
@@ -177,7 +234,7 @@ class TestYuanyingPlugin(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(delta, 6 * 3600)
         self.assertLess(delta, 6 * 3600 + 15)
 
-    async def test_chuqiao_busy_reply_does_not_reset_wait_time(self) -> None:
+    async def test_chuqiao_busy_reply_requests_status_without_resetting_wait_time(self) -> None:
         plugin = AutoYuanyingPlugin(_dummy_config(), logging.getLogger("test"))
         original = datetime.now() + timedelta(hours=3)
         plugin._chuqiao_blocked_until = original  # type: ignore[attr-defined]
@@ -192,7 +249,8 @@ class TestYuanyingPlugin(unittest.IsolatedAsyncioTestCase):
             is_reply_to_me=True,
         )
         actions = await plugin.on_message(ctx)
-        self.assertIsNone(actions)
+        assert actions is not None
+        self.assertEqual([a.text for a in actions], [".元婴状态"])
         self.assertEqual(getattr(plugin, "_chuqiao_blocked_until"), original)
 
 
