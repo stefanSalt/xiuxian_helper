@@ -132,6 +132,9 @@ class Config:
     enable_xinggong_wenan: bool = True
     enable_xinggong_deep_biguan: bool = False
 
+    # 全局发送节流
+    global_send_min_interval_seconds: int = 10
+
     @staticmethod
     def load() -> "Config":
         _load_dotenv(Path(".env"))
@@ -211,4 +214,5 @@ class Config:
             zongmen_action_spacing_seconds=_get_env_int("ZONGMEN_ACTION_SPACING_SECONDS", default=20),
             enable_xinggong_wenan=_get_env_bool("ENABLE_XINGGONG_WENAN", default=True),
             enable_xinggong_deep_biguan=_get_env_bool("ENABLE_XINGGONG_DEEP_BIGUAN", default=False),
+            global_send_min_interval_seconds=_get_env_int("GLOBAL_SEND_MIN_INTERVAL_SECONDS", default=10),
         )
