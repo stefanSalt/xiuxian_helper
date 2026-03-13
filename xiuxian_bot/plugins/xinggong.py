@@ -27,6 +27,7 @@ class AutoXinggongPlugin:
     _CMD_FORCE_EXIT = ".强行出关"
     _MATURE_CHECK_BUFFER_SECONDS = 10
     _QIZHEN_COOLDOWN_BUFFER_SECONDS = 5
+    _QIZHEN_COOLDOWN_SECONDS = 12 * 3600
     _DEEP_BIGUAN_REFRESH_DELAY_SECONDS = 5 * 3600
     _STATUS_REPLY_WINDOW_SECONDS = 120
 
@@ -150,6 +151,35 @@ class AutoXinggongPlugin:
         total = days * 86400 + hours * 3600 + minutes * 60 + seconds
         return total if total > 0 else None
 
+    def _infer_qizhen_success_at(self, now: datetime, remaining_cooldown_seconds: int) -> datetime:
+        elapsed_seconds = max(0, self._QIZHEN_COOLDOWN_SECONDS - remaining_cooldown_seconds)
+        return now - timedelta(seconds=elapsed_seconds)
+
+    def _recover_qizhen_success_from_cooldown(
+        self,
+        now: datetime,
+        remaining_cooldown_seconds: int,
+    ) -> datetime | None:
+        success_at = self._infer_qizhen_success_at(now, remaining_cooldown_seconds)
+        cycle_start = self._cycle_start_dt(now)
+        earliest_second_success_at = cycle_start + timedelta(seconds=self._qizhen_second_offset_seconds)
+
+        if self._qizhen_first_success_at is None and self._qizhen_second_success_at is None:
+            if success_at >= earliest_second_success_at:
+                self._qizhen_first_success_at = cycle_start
+                self._qizhen_second_success_at = success_at
+            else:
+                self._qizhen_first_success_at = success_at
+            return success_at
+
+        if self._qizhen_first_success_at is not None and self._qizhen_second_success_at is None:
+            second_start = self._qizhen_first_success_at + timedelta(seconds=self._qizhen_second_offset_seconds)
+            if success_at >= second_start or success_at >= earliest_second_success_at:
+                self._qizhen_second_success_at = success_at
+                return success_at
+
+        return None
+
     def _clear_pending_biguan_status(self) -> None:
         self._deep_biguan_status_msg_id = None
         self._deep_biguan_status_requested_at = None
@@ -187,6 +217,38 @@ class AutoXinggongPlugin:
             await self._deep_biguan_status_loop(reason)
 
         await self._scheduler.schedule(key=key, delay_seconds=delay_seconds, action=_runner)
+
+    async def _schedule_deep_biguan_after_qizhen_success(
+        self,
+        success_at: datetime,
+        now: datetime,
+        *,
+        immediate_reason: str,
+    ) -> None:
+        if self._scheduler is None or not self._deep_biguan_enabled:
+            return
+
+        midpoint_delay_seconds = (
+            success_at + timedelta(seconds=self._DEEP_BIGUAN_REFRESH_DELAY_SECONDS) - now
+        ).total_seconds()
+        if midpoint_delay_seconds <= 0:
+            await self._schedule_deep_biguan_status_check(
+                0.0,
+                key="xinggong.deep_biguan.status.midpoint",
+                reason="midpoint",
+            )
+            return
+
+        await self._schedule_deep_biguan_status_check(
+            0.0,
+            key="xinggong.deep_biguan.status.now",
+            reason=immediate_reason,
+        )
+        await self._schedule_deep_biguan_status_check(
+            float(midpoint_delay_seconds),
+            key="xinggong.deep_biguan.status.midpoint",
+            reason="midpoint",
+        )
 
     async def _deep_biguan_status_loop(self, reason: str) -> None:
         if not self.enabled or not self._deep_biguan_enabled or self._send is None:
@@ -301,8 +363,15 @@ class AutoXinggongPlugin:
             blocked_until = now + timedelta(seconds=rem + self._QIZHEN_COOLDOWN_BUFFER_SECONDS)
             if self._qizhen_blocked_until is None or blocked_until > self._qizhen_blocked_until:
                 self._qizhen_blocked_until = blocked_until
+            recovered_success_at = self._recover_qizhen_success_from_cooldown(now, rem)
             # Stop retries; schedule the next loop at cooldown end.
             self._qizhen_pending_slot = None
+            if recovered_success_at is not None:
+                await self._schedule_deep_biguan_after_qizhen_success(
+                    recovered_success_at,
+                    now,
+                    immediate_reason="qizhen_recovered",
+                )
             if self._scheduler is not None:
                 await self._schedule_qizhen_loop(max(0.0, (self._qizhen_blocked_until - now).total_seconds()))
             return None
@@ -345,17 +414,11 @@ class AutoXinggongPlugin:
                 # Recompute the schedule immediately (cancels pending retries via key override).
                 if self._scheduler is not None:
                     await self._schedule_qizhen_loop(0.0)
-                    if self._deep_biguan_enabled:
-                        await self._schedule_deep_biguan_status_check(
-                            0.0,
-                            key="xinggong.deep_biguan.status.now",
-                            reason="qizhen_success",
-                        )
-                        await self._schedule_deep_biguan_status_check(
-                            float(self._DEEP_BIGUAN_REFRESH_DELAY_SECONDS),
-                            key="xinggong.deep_biguan.status.midpoint",
-                            reason="midpoint",
-                        )
+                    await self._schedule_deep_biguan_after_qizhen_success(
+                        now,
+                        now,
+                        immediate_reason="qizhen_success",
+                    )
             return None
 
         if self._deep_biguan_enabled and self._is_deep_biguan_status_reply(ctx, text, now):

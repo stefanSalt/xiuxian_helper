@@ -258,6 +258,72 @@ class TestXinggongPlugin(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(delta, 3723)
         self.assertLess(delta, 3800)
 
+    async def test_qizhen_cooldown_reply_recovers_first_success_and_future_midpoint(self) -> None:
+        plugin = AutoXinggongPlugin(
+            _dummy_config(enable_xinggong_deep_biguan=True),
+            logging.getLogger("test"),
+        )
+
+        calls: list[tuple[str, float]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                calls.append((key, delay_seconds))
+
+        plugin._scheduler = _FakeScheduler()  # type: ignore[attr-defined]
+
+        start = datetime.now()
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=21,
+            reply_to_msg_id=20,
+            sender_id=999,
+            text="你刚刚参与过布阵，心神消耗巨大，请在11小时0分钟0秒后再次启阵。",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=True,
+        )
+        await plugin.on_message(ctx)
+        recovered_at = getattr(plugin, "_qizhen_first_success_at")
+        self.assertIsNotNone(recovered_at)
+        self.assertIsNone(getattr(plugin, "_qizhen_second_success_at"))
+        elapsed = (start - recovered_at).total_seconds()
+        self.assertGreater(elapsed, 3590)
+        self.assertLess(elapsed, 3610)
+        self.assertIn(("xinggong.deep_biguan.status.now", 0.0), calls)
+        midpoint_delays = [delay for key, delay in calls if key == "xinggong.deep_biguan.status.midpoint"]
+        self.assertEqual(len(midpoint_delays), 1)
+        self.assertGreater(midpoint_delays[0], 14390)
+        self.assertLess(midpoint_delays[0], 14410)
+
+    async def test_qizhen_cooldown_reply_recovers_passed_midpoint_immediately(self) -> None:
+        plugin = AutoXinggongPlugin(
+            _dummy_config(enable_xinggong_deep_biguan=True),
+            logging.getLogger("test"),
+        )
+
+        calls: list[tuple[str, float]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                calls.append((key, delay_seconds))
+
+        plugin._scheduler = _FakeScheduler()  # type: ignore[attr-defined]
+
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=22,
+            reply_to_msg_id=21,
+            sender_id=999,
+            text="你刚刚参与过布阵，心神消耗巨大，请在6小时0分钟0秒后再次启阵。",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=True,
+        )
+        await plugin.on_message(ctx)
+        self.assertNotIn(("xinggong.deep_biguan.status.now", 0.0), calls)
+        self.assertIn(("xinggong.deep_biguan.status.midpoint", 0.0), calls)
+
     async def test_qizhen_success_schedules_deep_biguan_checks_when_enabled(self) -> None:
         plugin = AutoXinggongPlugin(
             _dummy_config(enable_xinggong_deep_biguan=True),
