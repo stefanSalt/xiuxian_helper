@@ -258,6 +258,40 @@ class TestXinggongPlugin(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(delta, 3723)
         self.assertLess(delta, 3800)
 
+    async def test_qizhen_existing_invite_reply_waits_210_seconds(self) -> None:
+        plugin = AutoXinggongPlugin(_dummy_config(), logging.getLogger("test"))
+
+        calls: list[tuple[str, float]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                calls.append((key, delay_seconds))
+
+        plugin._scheduler = _FakeScheduler()  # type: ignore[attr-defined]
+        now = datetime.now()
+        setattr(plugin, "_cycle_date", plugin._cycle_date_for(now))  # type: ignore[attr-defined]
+        setattr(plugin, "_qizhen_pending_slot", 1)
+        setattr(plugin, "_qizhen_last_sent_at", now - timedelta(seconds=180))
+
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=21,
+            reply_to_msg_id=None,
+            sender_id=999,
+            text="你已发布启阵邀请，请勿重复操作，等待同门响应或邀请超时。",
+            ts=datetime.now(timezone.utc),
+            is_reply=False,
+            is_reply_to_me=False,
+        )
+        await plugin.on_message(ctx)
+        pending_until = getattr(plugin, "_qizhen_existing_invite_until")
+        self.assertIsNotNone(pending_until)
+        self.assertEqual(getattr(plugin, "_qizhen_pending_slot"), 1)
+        qizhen_delays = [delay for key, delay in calls if key == "xinggong.qizhen.loop"]
+        self.assertEqual(len(qizhen_delays), 1)
+        self.assertGreater(qizhen_delays[0], 209)
+        self.assertLess(qizhen_delays[0], 211)
+
     async def test_qizhen_cooldown_reply_recovers_first_success_and_future_midpoint(self) -> None:
         plugin = AutoXinggongPlugin(
             _dummy_config(enable_xinggong_deep_biguan=True),
@@ -295,6 +329,28 @@ class TestXinggongPlugin(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(midpoint_delays), 1)
         self.assertGreater(midpoint_delays[0], 14390)
         self.assertLess(midpoint_delays[0], 14410)
+
+    async def test_qizhen_cooldown_reply_without_reply_still_matches_within_210_seconds(self) -> None:
+        plugin = AutoXinggongPlugin(_dummy_config(), logging.getLogger("test"))
+
+        now = datetime.now()
+        setattr(plugin, "_cycle_date", plugin._cycle_date_for(now))  # type: ignore[attr-defined]
+        setattr(plugin, "_qizhen_pending_slot", 1)
+        setattr(plugin, "_qizhen_last_sent_at", now - timedelta(seconds=180))
+
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=22,
+            reply_to_msg_id=None,
+            sender_id=999,
+            text="你刚刚参与过布阵，心神消耗巨大，请在11小时0分钟0秒后再次启阵。",
+            ts=datetime.now(timezone.utc),
+            is_reply=False,
+            is_reply_to_me=False,
+        )
+        await plugin.on_message(ctx)
+        self.assertIsNotNone(getattr(plugin, "_qizhen_blocked_until"))
+        self.assertIsNotNone(getattr(plugin, "_qizhen_first_success_at"))
 
     async def test_qizhen_cooldown_reply_recovers_passed_midpoint_immediately(self) -> None:
         plugin = AutoXinggongPlugin(

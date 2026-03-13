@@ -28,6 +28,8 @@ class AutoXinggongPlugin:
     _MATURE_CHECK_BUFFER_SECONDS = 10
     _QIZHEN_COOLDOWN_BUFFER_SECONDS = 5
     _QIZHEN_COOLDOWN_SECONDS = 12 * 3600
+    _QIZHEN_FEEDBACK_WINDOW_SECONDS = 210
+    _QIZHEN_EXISTING_INVITE_WAIT_SECONDS = 210
     _DEEP_BIGUAN_REFRESH_DELAY_SECONDS = 5 * 3600
     _STATUS_REPLY_WINDOW_SECONDS = 120
 
@@ -62,6 +64,7 @@ class AutoXinggongPlugin:
         # Cooldown observed from bot replies (may span across cycles).
         self._qizhen_blocked_until: datetime | None = None
         self._qizhen_last_sent_at: datetime | None = None
+        self._qizhen_existing_invite_until: datetime | None = None
 
         self._assist_blocked_until: datetime | None = None
         self._deep_biguan_status_msg_id: int | None = None
@@ -119,6 +122,7 @@ class AutoXinggongPlugin:
         self._qizhen_pending_slot = None
         self._qizhen_last_invite_msg_id = None
         self._qizhen_last_invite_slot = None
+        self._qizhen_existing_invite_until = None
         self._assist_blocked_until = None
         self._clear_pending_biguan_status()
 
@@ -179,6 +183,18 @@ class AutoXinggongPlugin:
                 return success_at
 
         return None
+
+    def _is_related_qizhen_feedback(self, ctx: MessageContext, now: datetime) -> bool:
+        if ctx.is_reply_to_me:
+            return True
+        if self._qizhen_pending_slot not in (1, 2):
+            return False
+        if self._qizhen_last_sent_at is None:
+            return False
+        return (now - self._qizhen_last_sent_at) <= timedelta(seconds=self._QIZHEN_FEEDBACK_WINDOW_SECONDS)
+
+    def _clear_qizhen_existing_invite_wait(self) -> None:
+        self._qizhen_existing_invite_until = None
 
     def _clear_pending_biguan_status(self) -> None:
         self._deep_biguan_status_msg_id = None
@@ -309,9 +325,12 @@ class AutoXinggongPlugin:
             desired_start = cycle_start
             if self._qizhen_blocked_until is not None and self._qizhen_blocked_until > desired_start:
                 desired_start = self._qizhen_blocked_until
+            if self._qizhen_existing_invite_until is not None and self._qizhen_existing_invite_until > desired_start:
+                desired_start = self._qizhen_existing_invite_until
             if now < desired_start:
                 await self._schedule_qizhen_loop((desired_start - now).total_seconds())
                 return
+            self._clear_qizhen_existing_invite_wait()
             self._qizhen_pending_slot = 1
             self._qizhen_last_sent_at = now
             await self._send(self.name, self._CMD_QIZHEN, True)
@@ -323,9 +342,12 @@ class AutoXinggongPlugin:
             desired_start = second_start
             if self._qizhen_blocked_until is not None and self._qizhen_blocked_until > desired_start:
                 desired_start = self._qizhen_blocked_until
+            if self._qizhen_existing_invite_until is not None and self._qizhen_existing_invite_until > desired_start:
+                desired_start = self._qizhen_existing_invite_until
             if now < desired_start:
                 await self._schedule_qizhen_loop((desired_start - now).total_seconds())
                 return
+            self._clear_qizhen_existing_invite_wait()
             self._qizhen_pending_slot = 2
             self._qizhen_last_sent_at = now
             await self._send(self.name, self._CMD_QIZHEN, True)
@@ -352,10 +374,7 @@ class AutoXinggongPlugin:
         my_tag = self._my_tag()
         if "再次启阵" in text and "请在" in text:
             # e.g. 你刚刚参与过布阵... 请在 11小时7分钟39秒 后再次启阵。
-            is_related = bool(ctx.is_reply_to_me)
-            if not is_related and self._qizhen_last_sent_at is not None:
-                is_related = (now - self._qizhen_last_sent_at) <= timedelta(seconds=90)
-            if not is_related:
+            if not self._is_related_qizhen_feedback(ctx, now):
                 return None
             rem = self._parse_duration_seconds(text)
             if rem is None:
@@ -363,6 +382,7 @@ class AutoXinggongPlugin:
             blocked_until = now + timedelta(seconds=rem + self._QIZHEN_COOLDOWN_BUFFER_SECONDS)
             if self._qizhen_blocked_until is None or blocked_until > self._qizhen_blocked_until:
                 self._qizhen_blocked_until = blocked_until
+            self._clear_qizhen_existing_invite_wait()
             recovered_success_at = self._recover_qizhen_success_from_cooldown(now, rem)
             # Stop retries; schedule the next loop at cooldown end.
             self._qizhen_pending_slot = None
@@ -376,9 +396,20 @@ class AutoXinggongPlugin:
                 await self._schedule_qizhen_loop(max(0.0, (self._qizhen_blocked_until - now).total_seconds()))
             return None
 
+        if "已发布启阵邀请" in text and "请勿重复操作" in text:
+            if not self._is_related_qizhen_feedback(ctx, now):
+                return None
+            self._qizhen_existing_invite_until = now + timedelta(seconds=self._QIZHEN_EXISTING_INVITE_WAIT_SECONDS)
+            if self._scheduler is not None:
+                await self._schedule_qizhen_loop(
+                    max(0.0, (self._qizhen_existing_invite_until - now).total_seconds())
+                )
+            return None
+
         if "周天星斗大阵-启" in text:
             if my_tag and my_tag in text:
                 # This is the bot's invite message for our own ".启阵".
+                self._clear_qizhen_existing_invite_wait()
                 self._qizhen_last_invite_msg_id = ctx.message_id
                 self._qizhen_last_invite_slot = self._qizhen_pending_slot
             else:
@@ -410,6 +441,7 @@ class AutoXinggongPlugin:
                     self._qizhen_first_success_at = now
                 elif self._qizhen_pending_slot == 2 and self._qizhen_second_success_at is None:
                     self._qizhen_second_success_at = now
+                self._clear_qizhen_existing_invite_wait()
                 self._qizhen_pending_slot = None
                 # Recompute the schedule immediately (cancels pending retries via key override).
                 if self._scheduler is not None:
