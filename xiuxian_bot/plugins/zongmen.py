@@ -42,6 +42,7 @@ class AutoZongmenPlugin:
         self._dianmao_done = False
         self._chuangong_count = 0
         self._chuangong_disabled = False
+        self._chuangong_pending = False
 
         if self.enabled:
             self._logger.info(
@@ -59,6 +60,7 @@ class AutoZongmenPlugin:
         self._dianmao_done = False
         self._chuangong_count = 0
         self._chuangong_disabled = False
+        self._chuangong_pending = False
 
     def _parse_hhmm(self, raw: str | None) -> tuple[int, int]:
         if raw is None:
@@ -125,11 +127,13 @@ class AutoZongmenPlugin:
 
         if "此神通需回复你的一条有价值的发言" in text:
             # Avoid spamming if our reply strategy doesn't work in this group.
+            self._chuangong_pending = False
             self._chuangong_disabled = True
             self._logger.warning("zongmen_chuangong_disabled reason=need_reply_hint text=%r", text)
             return None
 
         if "每日最多传功" in text or "你今日传功过于频繁" in text:
+            self._chuangong_pending = False
             self._chuangong_count = 3
             return None
 
@@ -141,6 +145,7 @@ class AutoZongmenPlugin:
             except ValueError:
                 return None
             if total == 3 and 0 <= count <= 3:
+                self._chuangong_pending = False
                 self._chuangong_count = count
         return None
 
@@ -201,12 +206,26 @@ class AutoZongmenPlugin:
         slot: int,
         occ_date: date,
         delay_seconds: float,
+        *,
+        is_retry: bool = False,
     ) -> None:
         hh, mm = self._chuangong_hms[slot - 1]
-        key = f"zongmen.chuangong.{slot}.{occ_date.strftime('%Y%m%d')}"
+        suffix = ".retry" if is_retry else ""
+        key = f"zongmen.chuangong.{slot}.{occ_date.strftime('%Y%m%d')}{suffix}"
 
         async def _runner() -> None:
-            await self._maybe_send_chuangong(send)
+            result = await self._maybe_send_chuangong(send)
+            if result == "defer":
+                retry_delay = float(max(1, self._spacing))
+                await self._schedule_chuangong(
+                    scheduler,
+                    send,
+                    slot,
+                    occ_date,
+                    retry_delay,
+                    is_retry=True,
+                )
+                return
             next_dt = self._next_occurrence(datetime.now(), hh, mm)
             await self._schedule_chuangong(
                 scheduler,
@@ -227,20 +246,26 @@ class AutoZongmenPlugin:
             return
         await send(self.name, self._cmd_dianmao, True)
 
-    async def _maybe_send_chuangong(self, send) -> None:
+    async def _maybe_send_chuangong(self, send) -> str:
         now = datetime.now()
         self._reset_if_new_day(now)
         if self._chuangong_disabled:
             self._logger.warning("zongmen_skip action=chuangong reason=disabled")
-            return
+            return "skip"
         if self._chuangong_count >= 3:
             self._logger.info("zongmen_skip action=chuangong reason=limit_reached count=%s", self._chuangong_count)
-            return
+            return "skip"
+        if self._chuangong_pending:
+            self._logger.info("zongmen_skip action=chuangong reason=pending")
+            return "defer"
 
+        self._chuangong_pending = True
         mid = await send(self.name, self._xinde_for_send(), True)
         if mid is None:
+            self._chuangong_pending = False
             self._logger.warning("zongmen_chuangong_abort reason=no_mid")
-            return
+            return "skip"
 
         await send(self.name, self._cmd_chuangong, True, reply_to_msg_id=mid)
+        return "sent"
 

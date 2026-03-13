@@ -91,6 +91,24 @@ class TestZongmenParser(unittest.IsolatedAsyncioTestCase):
         await plugin.on_message(ctx)
         self.assertEqual(getattr(plugin, "_chuangong_count"), 1)
 
+    async def test_limit_reply_marks_chuangong_done_and_clears_pending(self) -> None:
+        plugin = AutoZongmenPlugin(_dummy_config(), logging.getLogger("test"))
+        plugin._chuangong_pending = True  # type: ignore[attr-defined]
+
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=22,
+            reply_to_msg_id=123,
+            sender_id=999,
+            text="你今日传功过于频繁，元神消耗过剧，请明日再来吧。每日最多传功 3 次。",
+            ts=datetime.now(timezone.utc),
+            is_reply=False,
+            is_reply_to_me=False,
+        )
+        await plugin.on_message(ctx)
+        self.assertEqual(getattr(plugin, "_chuangong_count"), 3)
+        self.assertFalse(getattr(plugin, "_chuangong_pending"))
+
 
 class TestZongmenBootstrap(unittest.IsolatedAsyncioTestCase):
     async def test_bootstrap_catchup_sends_dianmao_and_chuangong(self) -> None:
@@ -100,17 +118,32 @@ class TestZongmenBootstrap(unittest.IsolatedAsyncioTestCase):
 
         calls: list[tuple[str, str, bool, int | None]] = []
         next_id = 1000
+        success_count = 0
 
         async def fake_send(plugin_name: str, text: str, reply_to_topic: bool, *, reply_to_msg_id=None):
-            nonlocal next_id
+            nonlocal next_id, success_count
             calls.append((plugin_name, text, reply_to_topic, reply_to_msg_id))
             next_id += 1
+            if text == "宗门传功" and reply_to_msg_id is not None:
+                success_count += 1
+                await plugin.on_message(
+                    MessageContext(
+                        chat_id=-100,
+                        message_id=next_id,
+                        reply_to_msg_id=reply_to_msg_id,
+                        sender_id=999,
+                        text=f"传功成功记录！你为宗门贡献了心得，获得了 30 点贡献。今日已传功 {success_count}/3 次。",
+                        ts=datetime.now(timezone.utc),
+                        is_reply=True,
+                        is_reply_to_me=True,
+                    )
+                )
             return next_id
 
         await plugin.bootstrap(scheduler, fake_send)
 
-        # Let scheduled tasks run.
-        await asyncio.sleep(0.2)
+        # Let scheduled tasks run, including pending retries after each success clears pending.
+        await asyncio.sleep(2.5)
         await scheduler.cancel_all()
 
         # Expect 1 dianmao + 3*(xinde + command) = 7 sends.
@@ -124,3 +157,42 @@ class TestZongmenBootstrap(unittest.IsolatedAsyncioTestCase):
 
         cmds = [c for c in calls if c[1] == "宗门传功" and c[3] is not None]
         self.assertEqual(len(cmds), 3)
+
+    async def test_bootstrap_catchup_stops_after_limit_reply(self) -> None:
+        logger = logging.getLogger("test")
+        scheduler = Scheduler(logger)
+        plugin = AutoZongmenPlugin(_dummy_config(), logger)
+
+        calls: list[tuple[str, str, bool, int | None]] = []
+        next_id = 2000
+        limit_seen = False
+
+        async def fake_send(plugin_name: str, text: str, reply_to_topic: bool, *, reply_to_msg_id=None):
+            nonlocal next_id, limit_seen
+            calls.append((plugin_name, text, reply_to_topic, reply_to_msg_id))
+            next_id += 1
+            if text == "宗门传功" and reply_to_msg_id is not None and not limit_seen:
+                limit_seen = True
+                await plugin.on_message(
+                    MessageContext(
+                        chat_id=-100,
+                        message_id=next_id,
+                        reply_to_msg_id=reply_to_msg_id,
+                        sender_id=999,
+                        text="你今日传功过于频繁，元神消耗过剧，请明日再来吧。每日最多传功 3 次。",
+                        ts=datetime.now(timezone.utc),
+                        is_reply=True,
+                        is_reply_to_me=True,
+                    )
+                )
+            return next_id
+
+        await plugin.bootstrap(scheduler, fake_send)
+        await asyncio.sleep(0.2)
+        await scheduler.cancel_all()
+
+        xinde = [c for c in calls if c[1].startswith("心得：")]
+        cmds = [c for c in calls if c[1] == "宗门传功" and c[3] is not None]
+        self.assertEqual(len(xinde), 1)
+        self.assertEqual(len(cmds), 1)
+        self.assertEqual(getattr(plugin, "_chuangong_count"), 3)
