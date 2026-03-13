@@ -69,8 +69,12 @@ class AutoYuanyingPlugin:
             return None
         return days * 86400 + hours * 3600 + minutes * 60 + seconds
 
+    def _compact_text(self, text: str) -> str:
+        return re.sub(r"\s+", "", text or "")
+
     def _parse_chuqiao_status_remaining(self, text: str) -> int | None:
-        if "状态:元神出窍" not in text or "归来倒计时:" not in text:
+        compact = self._compact_text(text)
+        if "状态:元神出窍" not in compact or "归来倒计时:" not in compact:
             return None
         return self._parse_duration_seconds(text)
 
@@ -188,7 +192,8 @@ class AutoYuanyingPlugin:
             await self._set_chuqiao_next(float(remaining + self._BUFFER_SECONDS))
             return None
 
-        if "状态:窍中温养" in text:
+        compact = self._compact_text(text)
+        if "状态:窍中温养" in compact:
             self._chuqiao_waiting_settle = False
             self._chuqiao_blocked_until = None
             return [

@@ -182,6 +182,27 @@ class TestYuanyingPlugin(unittest.IsolatedAsyncioTestCase):
         self.assertLess(delta, 7 * 3600)
         self.assertTrue(getattr(plugin, "_chuqiao_waiting_settle"))
 
+    async def test_chuqiao_status_reply_with_spaces_syncs_remaining_time(self) -> None:
+        plugin = AutoYuanyingPlugin(_dummy_config(), logging.getLogger("test"))
+        start = datetime.now()
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=311,
+            reply_to_msg_id=30,
+            sender_id=999,
+            text="【元婴状态】 状态: 元神出窍 归来倒计时: 6小时50分钟30秒",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=True,
+        )
+        await plugin.on_message(ctx)
+        blocked_until = getattr(plugin, "_chuqiao_blocked_until")
+        self.assertIsNotNone(blocked_until)
+        delta = (blocked_until - start).total_seconds()
+        self.assertGreater(delta, 6 * 3600)
+        self.assertLess(delta, 7 * 3600)
+        self.assertTrue(getattr(plugin, "_chuqiao_waiting_settle"))
+
     async def test_chuqiao_status_wenyang_restarts_chuqiao(self) -> None:
         plugin = AutoYuanyingPlugin(_dummy_config(), logging.getLogger("test"))
         ctx = MessageContext(
@@ -190,6 +211,22 @@ class TestYuanyingPlugin(unittest.IsolatedAsyncioTestCase):
             reply_to_msg_id=30,
             sender_id=999,
             text="【元婴状态】状态:窍中温养",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=True,
+        )
+        actions = await plugin.on_message(ctx)
+        assert actions is not None
+        self.assertEqual([a.text for a in actions], [".元婴出窍"])
+
+    async def test_chuqiao_status_wenyang_with_spaces_restarts_chuqiao(self) -> None:
+        plugin = AutoYuanyingPlugin(_dummy_config(), logging.getLogger("test"))
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=320,
+            reply_to_msg_id=30,
+            sender_id=999,
+            text="你的本命元婴 等级: 7 级 经验: 2986 / 3500 五行: 风 状态: 窍中温养 使用 .元婴出窍 或 .元婴闭关 派遣元婴。",
             ts=datetime.now(timezone.utc),
             is_reply=True,
             is_reply_to_me=True,
