@@ -14,6 +14,7 @@ def _dummy_config(
     enable_xinggong_wenan: bool = True,
     enable_xinggong_deep_biguan: bool = False,
     xinggong_wenan_interval_seconds: int = 43200,
+    xinggong_qizhen_start_time: str = "07:00",
 ) -> Config:
     return Config(
         tg_api_id=1,
@@ -45,7 +46,7 @@ def _dummy_config(
         xinggong_star_name="庚金星",
         xinggong_poll_interval_seconds=3600,
         xinggong_action_spacing_seconds=25,
-        xinggong_qizhen_start_time="07:00",
+        xinggong_qizhen_start_time=xinggong_qizhen_start_time,
         xinggong_qizhen_retry_interval_seconds=120,
         xinggong_qizhen_second_offset_seconds=43500,
         xinggong_wenan_interval_seconds=xinggong_wenan_interval_seconds,
@@ -489,6 +490,76 @@ class TestXinggongPlugin(unittest.IsolatedAsyncioTestCase):
         key, delay = scheduled[-1]
         self.assertEqual(key, "xinggong.qizhen.loop")
         self.assertGreater(delay, 9 * 3600)
+
+    async def test_qizhen_loop_waits_for_second_success_cooldown_end_before_next_cycle(self) -> None:
+        now = datetime.now()
+        future_start = (now + timedelta(hours=1)).strftime("%H:%M")
+        plugin = AutoXinggongPlugin(
+            _dummy_config(xinggong_qizhen_start_time=future_start),
+            logging.getLogger("test"),
+        )
+
+        scheduled: list[tuple[str, float]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                scheduled.append((key, delay_seconds))
+
+        sends: list[str] = []
+
+        async def _send(_plugin: str, text: str, _reply_to_topic: bool) -> int | None:
+            sends.append(text)
+            return None
+
+        plugin._scheduler = _FakeScheduler()  # type: ignore[attr-defined]
+        plugin._send = _send  # type: ignore[attr-defined]
+        setattr(plugin, "_cycle_date", plugin._cycle_date_for(now))  # type: ignore[attr-defined]
+        plugin._qizhen_first_success_at = now - timedelta(hours=13)  # type: ignore[attr-defined]
+        plugin._qizhen_second_success_at = now - timedelta(minutes=1)  # type: ignore[attr-defined]
+        plugin._qizhen_blocked_until = now + timedelta(minutes=10)  # type: ignore[attr-defined]
+        plugin._qizhen_next_cycle_at = plugin._qizhen_blocked_until  # type: ignore[attr-defined]
+
+        await plugin._qizhen_loop()  # type: ignore[attr-defined]
+        self.assertEqual(sends, [])
+        self.assertTrue(scheduled)
+        key, delay = scheduled[-1]
+        self.assertEqual(key, "xinggong.qizhen.loop")
+        self.assertGreater(delay, 590)
+        self.assertLess(delay, 610)
+
+    async def test_qizhen_loop_restarts_immediately_after_second_success_cooldown(self) -> None:
+        now = datetime.now()
+        future_start = (now + timedelta(hours=1)).strftime("%H:%M")
+        plugin = AutoXinggongPlugin(
+            _dummy_config(xinggong_qizhen_start_time=future_start),
+            logging.getLogger("test"),
+        )
+
+        scheduled: list[tuple[str, float]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                scheduled.append((key, delay_seconds))
+
+        sends: list[str] = []
+
+        async def _send(_plugin: str, text: str, _reply_to_topic: bool) -> int | None:
+            sends.append(text)
+            return 999
+
+        plugin._scheduler = _FakeScheduler()  # type: ignore[attr-defined]
+        plugin._send = _send  # type: ignore[attr-defined]
+        setattr(plugin, "_cycle_date", plugin._cycle_date_for(now))  # type: ignore[attr-defined]
+        plugin._qizhen_first_success_at = now - timedelta(hours=13)  # type: ignore[attr-defined]
+        plugin._qizhen_second_success_at = now - timedelta(hours=12, seconds=10)  # type: ignore[attr-defined]
+        plugin._qizhen_blocked_until = now - timedelta(seconds=1)  # type: ignore[attr-defined]
+        plugin._qizhen_next_cycle_at = now - timedelta(seconds=1)  # type: ignore[attr-defined]
+
+        await plugin._qizhen_loop()  # type: ignore[attr-defined]
+        self.assertEqual(sends, [".启阵"])
+        self.assertEqual(getattr(plugin, "_qizhen_pending_slot"), 1)
+        self.assertEqual(getattr(plugin, "_cycle_date"), now.date())
+        self.assertIn(("xinggong.qizhen.loop", 120.0), scheduled)
 
 
 if __name__ == "__main__":

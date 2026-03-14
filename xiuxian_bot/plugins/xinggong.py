@@ -63,6 +63,7 @@ class AutoXinggongPlugin:
         self._qizhen_last_invite_slot: int | None = None
         # Cooldown observed from bot replies (may span across cycles).
         self._qizhen_blocked_until: datetime | None = None
+        self._qizhen_next_cycle_at: datetime | None = None
         self._qizhen_last_sent_at: datetime | None = None
         self._qizhen_existing_invite_until: datetime | None = None
 
@@ -112,19 +113,33 @@ class AutoXinggongPlugin:
         cycle_date = self._cycle_date_for(now)
         return now.replace(year=cycle_date.year, month=cycle_date.month, day=cycle_date.day, hour=hh, minute=mm, second=0, microsecond=0)
 
-    def _reset_if_new_cycle(self, now: datetime) -> None:
-        cycle = self._cycle_date_for(now)
-        if self._cycle_date == cycle:
-            return
-        self._cycle_date = cycle
+    def _clear_qizhen_cycle_state(
+        self,
+        *,
+        cycle_date: date,
+        clear_blocked_until: bool,
+    ) -> None:
+        self._cycle_date = cycle_date
         self._qizhen_first_success_at = None
         self._qizhen_second_success_at = None
         self._qizhen_pending_slot = None
         self._qizhen_last_invite_msg_id = None
         self._qizhen_last_invite_slot = None
         self._qizhen_existing_invite_until = None
+        self._qizhen_next_cycle_at = None
+        if clear_blocked_until:
+            self._qizhen_blocked_until = None
         self._assist_blocked_until = None
         self._clear_pending_biguan_status()
+
+    def _reset_if_new_cycle(self, now: datetime) -> None:
+        if self._qizhen_next_cycle_at is not None and now >= self._qizhen_next_cycle_at:
+            self._clear_qizhen_cycle_state(cycle_date=now.date(), clear_blocked_until=True)
+            return
+        cycle = self._cycle_date_for(now)
+        if self._cycle_date == cycle:
+            return
+        self._clear_qizhen_cycle_state(cycle_date=cycle, clear_blocked_until=False)
 
     def _next_poll_delay_seconds(self, status) -> float:
         base = float(self._poll_interval_seconds)
@@ -163,7 +178,7 @@ class AutoXinggongPlugin:
         self,
         now: datetime,
         remaining_cooldown_seconds: int,
-    ) -> datetime | None:
+    ) -> tuple[datetime | None, int | None]:
         success_at = self._infer_qizhen_success_at(now, remaining_cooldown_seconds)
         cycle_start = self._cycle_start_dt(now)
         earliest_second_success_at = cycle_start + timedelta(seconds=self._qizhen_second_offset_seconds)
@@ -172,17 +187,25 @@ class AutoXinggongPlugin:
             if success_at >= earliest_second_success_at:
                 self._qizhen_first_success_at = cycle_start
                 self._qizhen_second_success_at = success_at
-            else:
-                self._qizhen_first_success_at = success_at
-            return success_at
+                return success_at, 2
+            self._qizhen_first_success_at = success_at
+            return success_at, 1
 
         if self._qizhen_first_success_at is not None and self._qizhen_second_success_at is None:
             second_start = self._qizhen_first_success_at + timedelta(seconds=self._qizhen_second_offset_seconds)
             if success_at >= second_start or success_at >= earliest_second_success_at:
                 self._qizhen_second_success_at = success_at
-                return success_at
+                return success_at, 2
 
-        return None
+        return None, None
+
+    def _set_qizhen_cooldown_from_success(self, success_at: datetime, *, slot: int) -> None:
+        blocked_until = success_at + timedelta(seconds=self._QIZHEN_COOLDOWN_SECONDS + self._QIZHEN_COOLDOWN_BUFFER_SECONDS)
+        self._qizhen_blocked_until = blocked_until
+        if slot == 2:
+            self._qizhen_next_cycle_at = blocked_until
+        else:
+            self._qizhen_next_cycle_at = None
 
     def _is_related_qizhen_feedback(self, ctx: MessageContext, now: datetime) -> bool:
         if ctx.is_reply_to_me:
@@ -354,7 +377,11 @@ class AutoXinggongPlugin:
             await self._schedule_qizhen_loop(float(self._qizhen_retry_seconds))
             return
 
-        # Both runs done for this cycle; schedule next cycle start.
+        # Both runs done for this cycle; wait for the next cooldown-driven cycle rollover.
+        if self._qizhen_next_cycle_at is not None and now < self._qizhen_next_cycle_at:
+            await self._schedule_qizhen_loop((self._qizhen_next_cycle_at - now).total_seconds())
+            return
+
         next_cycle_start = cycle_start + timedelta(days=1)
         await self._schedule_qizhen_loop(max(0.0, (next_cycle_start - now).total_seconds()))
 
@@ -383,7 +410,9 @@ class AutoXinggongPlugin:
             if self._qizhen_blocked_until is None or blocked_until > self._qizhen_blocked_until:
                 self._qizhen_blocked_until = blocked_until
             self._clear_qizhen_existing_invite_wait()
-            recovered_success_at = self._recover_qizhen_success_from_cooldown(now, rem)
+            recovered_success_at, recovered_slot = self._recover_qizhen_success_from_cooldown(now, rem)
+            if recovered_success_at is not None and recovered_slot is not None:
+                self._set_qizhen_cooldown_from_success(recovered_success_at, slot=recovered_slot)
             # Stop retries; schedule the next loop at cooldown end.
             self._qizhen_pending_slot = None
             if recovered_success_at is not None:
@@ -437,10 +466,12 @@ class AutoXinggongPlugin:
             # Treat as success only if it matches our own invite edit, or explicitly mentions us.
             is_mine = (self._qizhen_last_invite_msg_id == ctx.message_id) or (my_tag and my_tag in text)
             if is_mine and self._qizhen_pending_slot in (1, 2):
-                if self._qizhen_pending_slot == 1 and self._qizhen_first_success_at is None:
+                success_slot = self._qizhen_pending_slot
+                if success_slot == 1 and self._qizhen_first_success_at is None:
                     self._qizhen_first_success_at = now
-                elif self._qizhen_pending_slot == 2 and self._qizhen_second_success_at is None:
+                elif success_slot == 2 and self._qizhen_second_success_at is None:
                     self._qizhen_second_success_at = now
+                self._set_qizhen_cooldown_from_success(now, slot=success_slot)
                 self._clear_qizhen_existing_invite_wait()
                 self._qizhen_pending_slot = None
                 # Recompute the schedule immediately (cancels pending retries via key override).
