@@ -135,6 +135,10 @@ class Config:
     # 全局发送节流
     global_send_min_interval_seconds: int = 10
 
+    # 闯塔（日常）
+    enable_chuangta: bool = False
+    chuangta_time: str = "14:15"
+
     @staticmethod
     def load() -> "Config":
         _load_dotenv(Path(".env"))
@@ -215,4 +219,6 @@ class Config:
             enable_xinggong_wenan=_get_env_bool("ENABLE_XINGGONG_WENAN", default=True),
             enable_xinggong_deep_biguan=_get_env_bool("ENABLE_XINGGONG_DEEP_BIGUAN", default=False),
             global_send_min_interval_seconds=_get_env_int("GLOBAL_SEND_MIN_INTERVAL_SECONDS", default=10),
+            enable_chuangta=_get_env_bool("ENABLE_CHUANGTA", default=False),
+            chuangta_time=_get_env_str("CHUANGTA_TIME", default="14:15"),
         )

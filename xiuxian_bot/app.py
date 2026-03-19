@@ -14,6 +14,7 @@ from .tg_adapter import TGAdapter
 from .plugins.biguan import AutoBiguanPlugin
 from .plugins.daily import DailyPlugin
 from .plugins.garden import AutoGardenPlugin
+from .plugins.chuangta import AutoChuangtaPlugin
 from .plugins.xinggong import AutoXinggongPlugin
 from .plugins.yuanying import AutoYuanyingPlugin
 from .plugins.zongmen import AutoZongmenPlugin
@@ -102,6 +103,7 @@ async def run() -> None:
     biguan = AutoBiguanPlugin(config, logger)
     daily = DailyPlugin(config, logger)
     garden = AutoGardenPlugin(config, logger)
+    chuangta = AutoChuangtaPlugin(config, logger)
     xinggong = AutoXinggongPlugin(config, logger)
     yuanying = AutoYuanyingPlugin(config, logger)
     zongmen = AutoZongmenPlugin(config, logger)
@@ -110,6 +112,7 @@ async def run() -> None:
         biguan,
         daily,
         garden,
+        chuangta,
         xinggong,
         yuanying,
         zongmen,
@@ -201,6 +204,8 @@ async def run() -> None:
         await xinggong.bootstrap(scheduler, _send)
     if yuanying.enabled:
         await yuanying.bootstrap(scheduler, _send)
+    if chuangta.enabled:
+        await chuangta.bootstrap(scheduler, _send)
     if zongmen.enabled:
         await zongmen.bootstrap(scheduler, _send)
     try:
