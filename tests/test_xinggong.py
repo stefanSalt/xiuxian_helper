@@ -123,8 +123,10 @@ class TestXinggongPlugin(unittest.IsolatedAsyncioTestCase):
 
         await plugin.bootstrap(_FakeScheduler(), _send)
         keys = {k for k, _ in calls}
+        delays = dict(calls)
         self.assertIn("xinggong.qizhen.loop", keys)
         self.assertIn("xinggong.wenan.loop", keys)
+        self.assertEqual(delays["xinggong.wenan.loop"], 43200.0)
 
     async def test_bootstrap_skips_wenan_loop_when_disabled(self) -> None:
         plugin = AutoXinggongPlugin(

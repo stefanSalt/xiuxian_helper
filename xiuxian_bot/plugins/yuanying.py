@@ -103,12 +103,18 @@ class AutoYuanyingPlugin:
             return None
         return self._parse_duration_seconds(text)
 
+    def _initial_liefeng_delay_seconds(self) -> float:
+        now = datetime.now()
+        if self._liefeng_blocked_until is not None and now < self._liefeng_blocked_until:
+            return max(0.0, (self._liefeng_blocked_until - now).total_seconds())
+        return float(self._liefeng_interval_seconds)
+
     async def bootstrap(self, scheduler: Scheduler, send: SendFn) -> None:
         if not self.enabled:
             return
         self._scheduler = scheduler
         self._send = send
-        await self._schedule_liefeng_loop(0.0)
+        await self._schedule_liefeng_loop(self._initial_liefeng_delay_seconds())
         await self._schedule_chuqiao_loop(0.0)
 
     async def _schedule_liefeng_loop(self, delay_seconds: float) -> None:

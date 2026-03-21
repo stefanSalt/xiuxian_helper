@@ -543,6 +543,12 @@ class AutoXinggongPlugin:
         self._deep_biguan_status_reason = reason
         self._save_state()
 
+    def _initial_wenan_delay_seconds(self) -> float:
+        now = datetime.now()
+        if self._wenan_next_at is not None and now < self._wenan_next_at:
+            return max(0.0, (self._wenan_next_at - now).total_seconds())
+        return float(self._wenan_interval_seconds)
+
     async def bootstrap(self, scheduler: Scheduler, send) -> None:
         if not self.enabled:
             return
@@ -554,10 +560,7 @@ class AutoXinggongPlugin:
         await self._schedule_observatory_poll(poll_delay_seconds)
         await self._schedule_qizhen_loop(0.0)
         if self._wenan_enabled:
-            wenan_delay_seconds = 0.0
-            if self._wenan_next_at is not None:
-                wenan_delay_seconds = max(0.0, (self._wenan_next_at - datetime.now()).total_seconds())
-            await self._schedule_wenan_loop(wenan_delay_seconds)
+            await self._schedule_wenan_loop(self._initial_wenan_delay_seconds())
         await self._restore_deep_biguan_schedule()
         await self._restore_guanxing_schedules()
 

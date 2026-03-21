@@ -72,7 +72,7 @@ class TestYuanyingPlugin(unittest.IsolatedAsyncioTestCase):
             return None
 
         await plugin.bootstrap(_FakeScheduler(), _send)
-        self.assertIn(("yuanying.liefeng.loop", 0.0), calls)
+        self.assertIn(("yuanying.liefeng.loop", 43200.0), calls)
         self.assertIn(("yuanying.chuqiao.loop", 0.0), calls)
 
     async def test_loops_use_expected_intervals(self) -> None:
