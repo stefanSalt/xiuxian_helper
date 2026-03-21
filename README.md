@@ -59,6 +59,7 @@ cp .env.example .env
 首期只需要先填写系统级字段：
 - `APP_DB_PATH`
 - `LOG_DIR`
+- `SESSION_ROOT_DIR`（可选）
 - `WEB_HOST`
 - `WEB_PORT`
 - `WEB_ADMIN_USERNAME`
@@ -93,6 +94,17 @@ http://127.0.0.1:8000
 3. 保存后可选择启用
 4. 在面板里启动/停止账号
 
+### Session 文件路径说明
+
+- 本地直接运行时，`tg_session_name` 仍可填写普通名称，例如 `bot_a`
+- 若设置了 `SESSION_ROOT_DIR`，脚本会把**相对**的 `tg_session_name` 自动解析到该目录下
+- 例如：
+  - `SESSION_ROOT_DIR=/app/data/sessions`
+  - `tg_session_name=bot_a`
+  - 实际 session 文件会落到 `/app/data/sessions/bot_a.session`
+
+这一步是为了让 Docker 场景下的 session 持久化更稳定，不要求你在网页里手动填绝对路径
+
 ## 日志策略
 
 默认 `INFO` 级别下，日志只保留重点：
@@ -121,6 +133,54 @@ http://127.0.0.1:8000
 - 元婴探寻裂缝 / 元婴出窍时间点
 - 闯塔当天进度
 - 宗门点卯 / 传功当天进度
+
+## Docker 部署
+
+已提供：
+- `Dockerfile`
+- `docker-compose.yml`
+- `.dockerignore`
+
+默认 Docker 方案：
+- 镜像基础：`python:3.12-slim`
+- 时区：`Asia/Shanghai`
+- Web 端口：`11111`
+- 持久化目录：宿主机 `./data`
+- `.env`：宿主机根目录 `.env` 挂载到容器 `/app/.env`
+
+### 启动
+
+```bash
+docker compose up -d --build
+```
+
+访问：
+
+```text
+http://127.0.0.1:11111
+```
+
+### 持久化内容
+
+`docker-compose.yml` 默认会持久化：
+- `./data/xiuxian_app.sqlite3`
+- `./data/logs/`
+- `./data/sessions/*.session`
+- `./.env`
+
+### 停止
+
+```bash
+docker compose down
+```
+
+### 查看日志
+
+```bash
+docker compose logs -f
+```
+
+> 注意：容器里已强制注入 `WEB_HOST=0.0.0.0`、`WEB_PORT=11111`、`APP_DB_PATH=/app/data/xiuxian_app.sqlite3`、`LOG_DIR=/app/data/logs`、`SESSION_ROOT_DIR=/app/data/sessions`，因此不需要你在 `.env` 里再手动写一遍这些 Docker 专用路径。
 
 ## systemd 示例
 

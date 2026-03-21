@@ -1,0 +1,19 @@
+services:
+  xiuxian-helper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: xiuxian-helper
+    restart: unless-stopped
+    ports:
+      - "11111:11111"
+    environment:
+      TZ: Asia/Shanghai
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: 11111
+      APP_DB_PATH: /app/data/xiuxian_app.sqlite3
+      LOG_DIR: /app/data/logs
+      SESSION_ROOT_DIR: /app/data/sessions
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./data:/app/data

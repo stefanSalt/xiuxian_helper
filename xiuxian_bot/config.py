@@ -103,6 +103,7 @@ class SystemConfig:
     web_admin_password: str = "changeme"
     web_secret_key: str = "changeme-secret"
     log_dir: str = "logs"
+    session_root_dir: str = ""
     default_account_name: str = "default"
 
     @staticmethod
@@ -123,6 +124,7 @@ class SystemConfig:
             web_admin_password=admin_password,
             web_secret_key=secret_key,
             log_dir=_get_env_str("LOG_DIR", default="logs"),
+            session_root_dir=_get_env_str("SESSION_ROOT_DIR", default=""),
             default_account_name=_get_env_str("DEFAULT_ACCOUNT_NAME", default="default"),
         )
 
@@ -227,6 +229,9 @@ class Config:
         if state_db_path is not None:
             data["state_db_path"] = state_db_path
         return replace(self, **data)
+
+    def with_session_name(self, tg_session_name: str) -> "Config":
+        return replace(self, tg_session_name=tg_session_name)
 
     @staticmethod
     def from_mapping(data: Mapping[str, Any]) -> "Config":

@@ -155,6 +155,17 @@ class TestMultiAccountStorage(unittest.TestCase):
                 self.assertIsNone(repo.ensure_legacy_account(system_config))
             repo.close()
 
+    def test_runtime_resolves_relative_session_name_into_session_root_dir(self) -> None:
+        if not HAS_RUNTIME_DEPS:
+            self.skipTest("requires telethon runtime dependencies")
+        from xiuxian_bot.runtime import _resolve_session_name
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            system_config = SystemConfig(session_root_dir=str(Path(tmpdir) / "sessions"))
+            resolved = _resolve_session_name(system_config, "bot-1")
+            self.assertEqual(resolved, str(Path(tmpdir) / "sessions" / "bot-1"))
+            self.assertTrue((Path(tmpdir) / "sessions").exists())
+
 
 @unittest.skipUnless(HAS_RUNTIME_DEPS, "requires telethon runtime dependencies")
 class TestRunnerManager(unittest.IsolatedAsyncioTestCase):

@@ -42,6 +42,21 @@ def _short_text(text: str, max_chars: int = 160) -> str:
     return text[: max_chars - 1] + "…"
 
 
+def _resolve_session_name(system_config: SystemConfig, session_name: str) -> str:
+    raw = (session_name or "").strip()
+    if not raw:
+        return raw
+    root = (system_config.session_root_dir or "").strip()
+    session_path = Path(raw).expanduser()
+    if not root or session_path.is_absolute():
+        return str(session_path)
+    base = Path(root).expanduser()
+    if not base.is_absolute():
+        base = Path.cwd() / base
+    base.mkdir(parents=True, exist_ok=True)
+    return str(base / raw)
+
+
 def _in_scope(config: Config, text: str, reply_to_msg_id: int | None, is_reply_to_me: bool) -> bool:
     return (
         reply_to_msg_id == config.topic_id
@@ -165,6 +180,12 @@ class AccountRunner:
             account_name=self.record.name,
             state_db_path=self._system_config.app_db_path,
         )
+        resolved_session_name = _resolve_session_name(
+            self._system_config,
+            config.tg_session_name,
+        )
+        if resolved_session_name != config.tg_session_name:
+            config = config.with_session_name(resolved_session_name)
         scheduler = Scheduler(self._logger)
         state_store = SQLiteStateStore(
             self._system_config.app_db_path,
