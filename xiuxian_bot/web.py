@@ -350,6 +350,7 @@ def create_app() -> FastAPI:
             request,
             "account_form.html",
             _ctx(
+                request,
                 title="新增账号",
                 action="/accounts/new",
                 values=_template_values_for_new(system_config),
@@ -380,6 +381,7 @@ def create_app() -> FastAPI:
                 request,
                 "account_form.html",
                 _ctx(
+                    request,
                     title="新增账号",
                     action="/accounts/new",
                     values=values,
@@ -402,6 +404,7 @@ def create_app() -> FastAPI:
             request,
             "account_form.html",
             _ctx(
+                request,
                 title=f"编辑账号 #{account_id}",
                 action=f"/accounts/{account_id}/edit",
                 values=_template_values_for_account(record),
@@ -431,6 +434,7 @@ def create_app() -> FastAPI:
                 request,
                 "account_form.html",
                 _ctx(
+                    request,
                     title=f"编辑账号 #{account_id}",
                     action=f"/accounts/{account_id}/edit",
                     values=values,
@@ -504,6 +508,7 @@ def create_app() -> FastAPI:
             request,
             "logs.html",
             _ctx(
+                request,
                 account=record,
                 snapshot=snapshot,
                 content=content,

@@ -305,6 +305,14 @@ class TestWebApp(unittest.TestCase):
                     self.assertEqual(dashboard.status_code, 200)
                     self.assertIn("bot-1", dashboard.text)
 
+                    edit_page = client.get("/accounts/1/edit")
+                    self.assertEqual(edit_page.status_code, 200)
+                    self.assertIn("编辑账号 #1", edit_page.text)
+
+                    logs_page = client.get("/accounts/1/logs")
+                    self.assertEqual(logs_page.status_code, 200)
+                    self.assertIn("账号日志 #1 - bot-1", logs_page.text)
+
     def test_healthz_returns_ok_without_auth(self) -> None:
         from fastapi.testclient import TestClient
 
