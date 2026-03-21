@@ -36,11 +36,13 @@ class AutoXinggongPlugin:
     _CMD_DEEP_BIGUAN = ".深度闭关"
     _CMD_FORCE_EXIT = ".强行出关"
     _MATURE_CHECK_BUFFER_SECONDS = 10
+    _QIZHEN_BUFF_SECONDS = 6 * 3600
     _QIZHEN_COOLDOWN_BUFFER_SECONDS = 5
     _QIZHEN_COOLDOWN_SECONDS = 12 * 3600
     _QIZHEN_FEEDBACK_WINDOW_SECONDS = 210
     _QIZHEN_EXISTING_INVITE_WAIT_SECONDS = 210
     _DEEP_BIGUAN_REFRESH_DELAY_SECONDS = 5 * 3600
+    _DEEP_BIGUAN_KEEP_REASON = "post_buff_keep"
     _STATUS_REPLY_WINDOW_SECONDS = 120
     _GUANXING_VALID_SECONDS = 300
 
@@ -508,6 +510,15 @@ class AutoXinggongPlugin:
         if self._scheduler is None or not self._deep_biguan_enabled:
             return
 
+        buff_end = success_at + timedelta(seconds=self._QIZHEN_BUFF_SECONDS)
+        if now >= buff_end:
+            await self._schedule_deep_biguan_status_check(
+                0.0,
+                key="xinggong.deep_biguan.status.keep",
+                reason=self._DEEP_BIGUAN_KEEP_REASON,
+            )
+            return
+
         midpoint_delay_seconds = (
             success_at + timedelta(seconds=self._DEEP_BIGUAN_REFRESH_DELAY_SECONDS) - now
         ).total_seconds()
@@ -949,6 +960,7 @@ class AutoXinggongPlugin:
 
         if self._deep_biguan_enabled and self._is_deep_biguan_status_reply(ctx, text, now):
             status = self._parse_deep_biguan_status(text)
+            status_reason = self._deep_biguan_status_reason
             self._clear_pending_biguan_status()
             if status == "inactive":
                 return [
@@ -961,6 +973,8 @@ class AutoXinggongPlugin:
                     )
                 ]
             if status == "active":
+                if status_reason == self._DEEP_BIGUAN_KEEP_REASON:
+                    return None
                 return [
                     SendAction(
                         plugin=self.name,
