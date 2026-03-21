@@ -13,8 +13,13 @@ def _dummy_config(
     enable_xinggong: bool = True,
     enable_xinggong_wenan: bool = True,
     enable_xinggong_deep_biguan: bool = False,
+    enable_xinggong_guanxing: bool = False,
     xinggong_wenan_interval_seconds: int = 43200,
     xinggong_qizhen_start_time: str = "07:00",
+    xinggong_guanxing_target_username: str = "salt9527",
+    xinggong_guanxing_preview_advance_seconds: int = 180,
+    xinggong_guanxing_shift_advance_seconds: int = 1,
+    xinggong_guanxing_watch_events: str = "星辰异象,地磁暴动",
 ) -> Config:
     return Config(
         tg_api_id=1,
@@ -61,6 +66,11 @@ def _dummy_config(
         zongmen_action_spacing_seconds=20,
         enable_xinggong_wenan=enable_xinggong_wenan,
         enable_xinggong_deep_biguan=enable_xinggong_deep_biguan,
+        enable_xinggong_guanxing=enable_xinggong_guanxing,
+        xinggong_guanxing_target_username=xinggong_guanxing_target_username,
+        xinggong_guanxing_preview_advance_seconds=xinggong_guanxing_preview_advance_seconds,
+        xinggong_guanxing_shift_advance_seconds=xinggong_guanxing_shift_advance_seconds,
+        xinggong_guanxing_watch_events=xinggong_guanxing_watch_events,
     )
 
 
@@ -155,6 +165,179 @@ class TestXinggongPlugin(unittest.IsolatedAsyncioTestCase):
         plugin._send = _send  # type: ignore[attr-defined]
         await plugin._wenan_loop()  # type: ignore[attr-defined]
         self.assertIn(("xinggong.wenan.loop", 777.0), calls)
+
+    async def test_high_value_preview_schedules_preview_and_shift(self) -> None:
+        plugin = AutoXinggongPlugin(
+            _dummy_config(enable_xinggong_guanxing=True),
+            logging.getLogger("test"),
+        )
+
+        scheduled: list[tuple[str, float]] = []
+        sends: list[tuple[str, str, bool, int | None]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                scheduled.append((key, delay_seconds))
+
+        async def _send(_plugin: str, text: str, reply_to_topic: bool, *, reply_to_msg_id=None):
+            sends.append((_plugin, text, reply_to_topic, reply_to_msg_id))
+            return 7001
+
+        plugin._scheduler = _FakeScheduler()  # type: ignore[attr-defined]
+        plugin._send = _send  # type: ignore[attr-defined]
+        plugin._should_ignore_external_guanxing_preview = lambda _now: False  # type: ignore[attr-defined]
+
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=1001,
+            reply_to_msg_id=123,
+            sender_id=999,
+            text="【星盘显化】@intoso 闭目凝神，推演天机...星盘之上，天机已然显现！\n下一次天道演化将是：【Good·星辰异象】\n当前天命所归：@mutourenazz",
+            ts=datetime.now(timezone.utc),
+            is_reply=False,
+            is_reply_to_me=False,
+        )
+        actions = await plugin.on_message(ctx)
+
+        self.assertIsNone(actions)
+        self.assertEqual(sends, [])
+        keys = {key for key, _ in scheduled}
+        self.assertIn("xinggong.guanxing.preview", keys)
+        self.assertIn("xinggong.guanxing.shift", keys)
+        self.assertIsNone(getattr(plugin, "_guanxing_own_command_msg_id"))
+        self.assertTrue(getattr(plugin, "_guanxing_claim_active"))
+
+    async def test_guanxing_preview_loop_sends_command(self) -> None:
+        plugin = AutoXinggongPlugin(
+            _dummy_config(enable_xinggong_guanxing=True),
+            logging.getLogger("test"),
+        )
+
+        sends: list[tuple[str, str, bool, int | None]] = []
+
+        async def _send(_plugin: str, text: str, reply_to_topic: bool, *, reply_to_msg_id=None):
+            sends.append((_plugin, text, reply_to_topic, reply_to_msg_id))
+            return 7001
+
+        plugin._send = _send  # type: ignore[attr-defined]
+        plugin._guanxing_claim_active = True  # type: ignore[attr-defined]
+        plugin._guanxing_settlement_at = datetime.now() + timedelta(minutes=3)  # type: ignore[attr-defined]
+
+        await plugin._send_guanxing_preview()  # type: ignore[attr-defined]
+
+        self.assertEqual(sends, [("xinggong", ".观星", True, None)])
+        self.assertEqual(getattr(plugin, "_guanxing_own_command_msg_id"), 7001)
+        self.assertTrue(getattr(plugin, "_guanxing_preview_sent"))
+
+    async def test_personal_preview_reply_becomes_shift_reply_target(self) -> None:
+        plugin = AutoXinggongPlugin(
+            _dummy_config(enable_xinggong_guanxing=True),
+            logging.getLogger("test"),
+        )
+        now = datetime.now()
+        plugin._guanxing_settlement_at = now + timedelta(minutes=1)  # type: ignore[attr-defined]
+        plugin._guanxing_claim_active = True  # type: ignore[attr-defined]
+        plugin._guanxing_own_command_msg_id = 8001  # type: ignore[attr-defined]
+
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=8002,
+            reply_to_msg_id=8001,
+            sender_id=999,
+            text="【星盘显化】@Me 闭目凝神，推演天机...星盘之上，天机已然显现！\n下一次天道演化将是：【Good·星辰异象】\n当前天命所归：@someone",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=True,
+        )
+        actions = await plugin.on_message(ctx)
+
+        self.assertIsNone(actions)
+        self.assertEqual(getattr(plugin, "_guanxing_own_preview_msg_id"), 8002)
+
+    async def test_shift_send_replies_to_personal_preview_message(self) -> None:
+        plugin = AutoXinggongPlugin(
+            _dummy_config(enable_xinggong_guanxing=True),
+            logging.getLogger("test"),
+        )
+
+        sends: list[tuple[str, str, bool, int | None]] = []
+
+        async def _send(_plugin: str, text: str, reply_to_topic: bool, *, reply_to_msg_id=None):
+            sends.append((_plugin, text, reply_to_topic, reply_to_msg_id))
+            return 9001
+
+        plugin._send = _send  # type: ignore[attr-defined]
+        plugin._guanxing_claim_active = True  # type: ignore[attr-defined]
+        plugin._guanxing_settlement_at = datetime.now() + timedelta(seconds=1)  # type: ignore[attr-defined]
+        plugin._guanxing_own_preview_msg_id = 9000  # type: ignore[attr-defined]
+
+        await plugin._send_guanxing_shift()  # type: ignore[attr-defined]
+        self.assertEqual(
+            sends,
+            [("xinggong", ".改换星移 @salt9527", True, 9000)],
+        )
+
+    def test_send_block_delay_seconds_only_blocks_noncritical_in_claim_window(self) -> None:
+        plugin = AutoXinggongPlugin(
+            _dummy_config(enable_xinggong_guanxing=True, xinggong_guanxing_shift_advance_seconds=1),
+            logging.getLogger("test"),
+        )
+        settlement_at = datetime.now() + timedelta(seconds=5)
+        plugin._guanxing_claim_active = True  # type: ignore[attr-defined]
+        plugin._guanxing_settlement_at = settlement_at  # type: ignore[attr-defined]
+
+        blocked = plugin.send_block_delay_seconds("garden", ".小药园", now=datetime.now())
+        allowed = plugin.send_block_delay_seconds("xinggong", ".改换星移 @salt9527", now=datetime.now())
+
+        self.assertGreater(blocked, 0.0)
+        self.assertEqual(allowed, 0.0)
+
+    async def test_guanxing_failure_cancels_claim_window(self) -> None:
+        plugin = AutoXinggongPlugin(
+            _dummy_config(enable_xinggong_guanxing=True),
+            logging.getLogger("test"),
+        )
+        plugin._guanxing_claim_active = True  # type: ignore[attr-defined]
+        plugin._guanxing_settlement_at = datetime.now() + timedelta(minutes=1)  # type: ignore[attr-defined]
+        plugin._guanxing_own_command_msg_id = 9100  # type: ignore[attr-defined]
+
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=9101,
+            reply_to_msg_id=9100,
+            sender_id=999,
+            text="你今日已观星一次，天机不可多泄，请明日再来",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=True,
+        )
+        actions = await plugin.on_message(ctx)
+
+        self.assertIsNone(actions)
+        self.assertFalse(getattr(plugin, "_guanxing_claim_active"))
+
+    async def test_external_preview_in_new_window_grace_period_is_ignored(self) -> None:
+        plugin = AutoXinggongPlugin(
+            _dummy_config(enable_xinggong_guanxing=True),
+            logging.getLogger("test"),
+        )
+
+        plugin._next_guanxing_settlement_at = lambda now: now + timedelta(hours=3)  # type: ignore[attr-defined]
+
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=9201,
+            reply_to_msg_id=123,
+            sender_id=999,
+            text="【星盘显化】@other 闭目凝神，推演天机...星盘之上，天机已然显现！\n下一次天道演化将是：【Good·星辰异象】\n当前天命所归：@someone",
+            ts=datetime.now(timezone.utc),
+            is_reply=False,
+            is_reply_to_me=False,
+        )
+        actions = await plugin.on_message(ctx)
+
+        self.assertIsNone(actions)
+        self.assertFalse(getattr(plugin, "_guanxing_claim_active"))
 
     async def test_status_sows_when_idle(self) -> None:
         plugin = AutoXinggongPlugin(_dummy_config(), logging.getLogger("test"))

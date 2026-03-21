@@ -131,6 +131,11 @@ class Config:
     # 星宫子功能开关
     enable_xinggong_wenan: bool = True
     enable_xinggong_deep_biguan: bool = False
+    enable_xinggong_guanxing: bool = False
+    xinggong_guanxing_target_username: str = "salt9527"
+    xinggong_guanxing_preview_advance_seconds: int = 180
+    xinggong_guanxing_shift_advance_seconds: int = 1
+    xinggong_guanxing_watch_events: str = "星辰异象,地磁暴动"
 
     # 全局发送节流
     global_send_min_interval_seconds: int = 10
@@ -218,6 +223,23 @@ class Config:
             zongmen_action_spacing_seconds=_get_env_int("ZONGMEN_ACTION_SPACING_SECONDS", default=20),
             enable_xinggong_wenan=_get_env_bool("ENABLE_XINGGONG_WENAN", default=True),
             enable_xinggong_deep_biguan=_get_env_bool("ENABLE_XINGGONG_DEEP_BIGUAN", default=False),
+            enable_xinggong_guanxing=_get_env_bool("ENABLE_XINGGONG_GUANXING", default=False),
+            xinggong_guanxing_target_username=_get_env_str(
+                "XINGGONG_GUANXING_TARGET_USERNAME",
+                default="salt9527",
+            ),
+            xinggong_guanxing_preview_advance_seconds=_get_env_int(
+                "XINGGONG_GUANXING_PREVIEW_ADVANCE_SECONDS",
+                default=180,
+            ),
+            xinggong_guanxing_shift_advance_seconds=_get_env_int(
+                "XINGGONG_GUANXING_SHIFT_ADVANCE_SECONDS",
+                default=1,
+            ),
+            xinggong_guanxing_watch_events=_get_env_str(
+                "XINGGONG_GUANXING_WATCH_EVENTS",
+                default="星辰异象,地磁暴动",
+            ),
             global_send_min_interval_seconds=_get_env_int("GLOBAL_SEND_MIN_INTERVAL_SECONDS", default=10),
             enable_chuangta=_get_env_bool("ENABLE_CHUANGTA", default=False),
             chuangta_time=_get_env_str("CHUANGTA_TIME", default="14:15"),

@@ -11,7 +11,7 @@ from ..domain.xinggong import parse_xinggong_observatory
 
 
 class AutoXinggongPlugin:
-    """星宫自动化：观星台 + 周天星斗大阵。"""
+    """星宫自动化：观星台 + 周天星斗大阵 + 观星劫持。"""
 
     name = "xinggong"
     priority = 40
@@ -22,6 +22,8 @@ class AutoXinggongPlugin:
     _CMD_QIZHEN = ".启阵"
     _CMD_ZHUZHEN = ".助阵"
     _CMD_WENAN = ".每日问安"
+    _CMD_GUANXING = ".观星"
+    _CMD_GAIHUAN = ".改换星移"
     _CMD_VIEW_BIGUAN = ".查看闭关"
     _CMD_DEEP_BIGUAN = ".深度闭关"
     _CMD_FORCE_EXIT = ".强行出关"
@@ -32,6 +34,7 @@ class AutoXinggongPlugin:
     _QIZHEN_EXISTING_INVITE_WAIT_SECONDS = 210
     _DEEP_BIGUAN_REFRESH_DELAY_SECONDS = 5 * 3600
     _STATUS_REPLY_WINDOW_SECONDS = 120
+    _GUANXING_VALID_SECONDS = 300
 
     _HHMM_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*$")
 
@@ -45,7 +48,21 @@ class AutoXinggongPlugin:
         self._spacing_seconds = max(0, int(config.xinggong_action_spacing_seconds))
         self._wenan_enabled = bool(config.enable_xinggong_wenan)
         self._deep_biguan_enabled = bool(config.enable_xinggong_deep_biguan)
+        self._guanxing_enabled = bool(config.enable_xinggong_guanxing)
         self._wenan_interval_seconds = max(60, int(config.xinggong_wenan_interval_seconds))
+        self._global_send_min_interval_seconds = max(0, int(config.global_send_min_interval_seconds))
+        self._guanxing_target_username = self._normalize_username(
+            config.xinggong_guanxing_target_username
+        )
+        self._guanxing_preview_advance_seconds = max(
+            1, int(config.xinggong_guanxing_preview_advance_seconds)
+        )
+        self._guanxing_shift_advance_seconds = max(
+            1, int(config.xinggong_guanxing_shift_advance_seconds)
+        )
+        self._guanxing_watch_events = self._parse_watch_events(
+            config.xinggong_guanxing_watch_events
+        )
 
         self._qizhen_hm = self._parse_hhmm(config.xinggong_qizhen_start_time)
         self._qizhen_retry_seconds = max(30, int(config.xinggong_qizhen_retry_interval_seconds))
@@ -71,10 +88,19 @@ class AutoXinggongPlugin:
         self._deep_biguan_status_msg_id: int | None = None
         self._deep_biguan_status_requested_at: datetime | None = None
         self._deep_biguan_status_reason: str | None = None
+        self._guanxing_claim_active = False
+        self._guanxing_claim_event: str | None = None
+        self._guanxing_settlement_at: datetime | None = None
+        self._guanxing_window_expires_at: datetime | None = None
+        self._guanxing_own_command_msg_id: int | None = None
+        self._guanxing_own_preview_msg_id: int | None = None
+        self._guanxing_preview_sent = False
+        self._guanxing_shift_sent = False
+        self._guanxing_detected_settlement_at: datetime | None = None
 
         if self.enabled:
             self._logger.info(
-                "xinggong_plugin_enabled star=%s poll_interval_seconds=%s qizhen_start=%s retry_seconds=%s second_offset_seconds=%s wenan_enabled=%s deep_biguan_enabled=%s wenan_interval_seconds=%s",
+                "xinggong_plugin_enabled star=%s poll_interval_seconds=%s qizhen_start=%s retry_seconds=%s second_offset_seconds=%s wenan_enabled=%s deep_biguan_enabled=%s guanxing_enabled=%s guanxing_preview_advance_seconds=%s guanxing_shift_advance_seconds=%s wenan_interval_seconds=%s",
                 self._star_name,
                 self._poll_interval_seconds,
                 config.xinggong_qizhen_start_time,
@@ -82,6 +108,9 @@ class AutoXinggongPlugin:
                 self._qizhen_second_offset_seconds,
                 self._wenan_enabled,
                 self._deep_biguan_enabled,
+                self._guanxing_enabled,
+                self._guanxing_preview_advance_seconds,
+                self._guanxing_shift_advance_seconds,
                 self._wenan_interval_seconds,
             )
 
@@ -90,6 +119,16 @@ class AutoXinggongPlugin:
         if not name:
             return ""
         return name if name.startswith("@") else f"@{name}"
+
+    def _normalize_username(self, raw: str) -> str:
+        value = (raw or "").strip()
+        if not value:
+            return ""
+        return value if value.startswith("@") else f"@{value}"
+
+    def _parse_watch_events(self, raw: str) -> tuple[str, ...]:
+        items = tuple(part.strip() for part in (raw or "").split(",") if part.strip())
+        return items or ("星辰异象", "地磁暴动")
 
     def _parse_hhmm(self, raw: str) -> tuple[int, int]:
         match = self._HHMM_RE.match(raw or "")
@@ -148,6 +187,91 @@ class AutoXinggongPlugin:
         delay = float(status.min_remaining_seconds + self._MATURE_CHECK_BUFFER_SECONDS)
         delay = max(1.0, min(base, delay))
         return delay
+
+    def _next_guanxing_settlement_at(self, now: datetime) -> datetime:
+        aligned = now.replace(minute=0, second=0, microsecond=0)
+        next_hour = ((aligned.hour // 3) + 1) * 3
+        if next_hour >= 24:
+            aligned = aligned + timedelta(days=1)
+            next_hour = 0
+        return aligned.replace(hour=next_hour)
+
+    def _guanxing_window_start(self, settlement_at: datetime) -> datetime:
+        return settlement_at - timedelta(hours=3)
+
+    def _clear_guanxing_claim_state(self) -> None:
+        self._guanxing_claim_active = False
+        self._guanxing_claim_event = None
+        self._guanxing_settlement_at = None
+        self._guanxing_window_expires_at = None
+        self._guanxing_own_command_msg_id = None
+        self._guanxing_own_preview_msg_id = None
+        self._guanxing_preview_sent = False
+        self._guanxing_shift_sent = False
+
+    def _expire_guanxing_claim_if_needed(self, now: datetime) -> None:
+        if not self._guanxing_claim_active:
+            return
+        if self._guanxing_settlement_at is not None and now >= self._guanxing_settlement_at:
+            self._clear_guanxing_claim_state()
+            return
+        if (
+            self._guanxing_window_expires_at is not None
+            and now >= self._guanxing_window_expires_at
+            and self._guanxing_own_preview_msg_id is None
+        ):
+            self._clear_guanxing_claim_state()
+
+    def _should_ignore_external_guanxing_preview(self, now: datetime) -> bool:
+        settlement_at = self._next_guanxing_settlement_at(now)
+        window_start = self._guanxing_window_start(settlement_at)
+        return now < (window_start + timedelta(seconds=self._GUANXING_VALID_SECONDS))
+
+    def _is_guanxing_preview(self, text: str) -> bool:
+        return "【星盘显化】" in text
+
+    def _match_guanxing_event(self, text: str) -> str | None:
+        if not self._is_guanxing_preview(text):
+            return None
+        for event_name in self._guanxing_watch_events:
+            if event_name and event_name in text:
+                return event_name
+        return None
+
+    def _is_own_guanxing_preview(self, ctx: MessageContext, text: str) -> bool:
+        if not self._is_guanxing_preview(text):
+            return False
+        if self._guanxing_own_command_msg_id is None:
+            return False
+        return ctx.reply_to_msg_id == self._guanxing_own_command_msg_id
+
+    def _is_critical_guanxing_send(self, plugin: str, text: str) -> bool:
+        if plugin != self.name:
+            return False
+        return text == self._CMD_GUANXING or text.startswith(self._CMD_GAIHUAN)
+
+    def send_block_delay_seconds(
+        self,
+        plugin: str,
+        text: str,
+        *,
+        now: datetime | None = None,
+    ) -> float:
+        if not self.enabled or not self._guanxing_enabled:
+            return 0.0
+        current = now or datetime.now()
+        self._expire_guanxing_claim_if_needed(current)
+        if not self._guanxing_claim_active or self._guanxing_settlement_at is None:
+            return 0.0
+        if self._is_critical_guanxing_send(plugin, text):
+            return 0.0
+        shift_at = self._guanxing_settlement_at - timedelta(
+            seconds=self._guanxing_shift_advance_seconds
+        )
+        block_start = shift_at - timedelta(seconds=self._global_send_min_interval_seconds)
+        if current < block_start:
+            return 0.0
+        return max(0.0, (self._guanxing_settlement_at - current).total_seconds())
 
     def _sow_cmd(self) -> str:
         # In this group, the command auto-fills all empty disks; no disk index needed.
@@ -336,6 +460,118 @@ class AutoXinggongPlugin:
         await self._send(self.name, self._CMD_WENAN, True)
         await self._schedule_wenan_loop(float(self._wenan_interval_seconds))
 
+    async def _schedule_guanxing_preview(self, delay_seconds: float) -> None:
+        if self._scheduler is None:
+            return
+
+        async def _runner() -> None:
+            await self._send_guanxing_preview()
+
+        await self._scheduler.schedule(
+            key="xinggong.guanxing.preview",
+            delay_seconds=max(0.0, delay_seconds),
+            action=_runner,
+        )
+
+    async def _schedule_guanxing_shift(self, delay_seconds: float) -> None:
+        if self._scheduler is None:
+            return
+
+        async def _runner() -> None:
+            await self._send_guanxing_shift()
+
+        await self._scheduler.schedule(
+            key="xinggong.guanxing.shift",
+            delay_seconds=max(0.0, delay_seconds),
+            action=_runner,
+        )
+
+    async def _register_guanxing_claim(self, now: datetime, event_name: str) -> None:
+        if (
+            not self.enabled
+            or not self._guanxing_enabled
+            or self._send is None
+            or not self._guanxing_target_username
+        ):
+            return
+
+        settlement_at = self._next_guanxing_settlement_at(now)
+        if self._guanxing_detected_settlement_at == settlement_at:
+            return
+
+        shift_at = settlement_at - timedelta(seconds=self._guanxing_shift_advance_seconds)
+        if shift_at <= now or self._should_ignore_external_guanxing_preview(now):
+            return
+
+        self._guanxing_claim_active = True
+        self._guanxing_claim_event = event_name
+        self._guanxing_settlement_at = settlement_at
+        self._guanxing_window_expires_at = None
+        self._guanxing_own_command_msg_id = None
+        self._guanxing_own_preview_msg_id = None
+        self._guanxing_preview_sent = False
+        self._guanxing_shift_sent = False
+        self._guanxing_detected_settlement_at = settlement_at
+
+        preview_at = settlement_at - timedelta(seconds=self._guanxing_preview_advance_seconds)
+        preview_delay = max(0.0, (preview_at - now).total_seconds())
+        await self._schedule_guanxing_preview(preview_delay)
+        await self._schedule_guanxing_shift((shift_at - now).total_seconds())
+
+    async def _send_guanxing_preview(self) -> None:
+        if (
+            not self.enabled
+            or not self._guanxing_enabled
+            or self._send is None
+            or not self._guanxing_target_username
+        ):
+            return
+        now = datetime.now()
+        self._expire_guanxing_claim_if_needed(now)
+        if not self._guanxing_claim_active or self._guanxing_settlement_at is None:
+            return
+        if self._guanxing_preview_sent or self._guanxing_own_command_msg_id is not None:
+            return
+        if now >= self._guanxing_settlement_at:
+            self._clear_guanxing_claim_state()
+            return
+        self._guanxing_preview_sent = True
+        msg_id = await self._send(self.name, self._CMD_GUANXING, True)
+        if msg_id is None:
+            self._clear_guanxing_claim_state()
+            return
+        self._guanxing_own_command_msg_id = msg_id
+
+    async def _send_guanxing_shift(self) -> None:
+        if (
+            not self.enabled
+            or not self._guanxing_enabled
+            or self._send is None
+            or not self._guanxing_target_username
+        ):
+            return
+        now = datetime.now()
+        self._expire_guanxing_claim_if_needed(now)
+        if not self._guanxing_claim_active or self._guanxing_settlement_at is None:
+            return
+
+        if self._guanxing_own_preview_msg_id is None:
+            remaining = (self._guanxing_settlement_at - now).total_seconds()
+            if remaining > 0.2:
+                await self._schedule_guanxing_shift(min(0.2, remaining))
+            else:
+                self._clear_guanxing_claim_state()
+            return
+
+        self._guanxing_shift_sent = True
+        await self._send(
+            self.name,
+            f"{self._CMD_GAIHUAN} {self._guanxing_target_username}",
+            True,
+            reply_to_msg_id=self._guanxing_own_preview_msg_id,
+        )
+        self._clear_guanxing_claim_state()
+
     async def _qizhen_loop(self) -> None:
         if not self.enabled or self._send is None:
             return
@@ -396,6 +632,30 @@ class AutoXinggongPlugin:
 
         now = datetime.now()
         self._reset_if_new_cycle(now)
+        self._expire_guanxing_claim_if_needed(now)
+
+        if self._guanxing_enabled:
+            if self._is_own_guanxing_preview(ctx, text):
+                self._guanxing_own_preview_msg_id = ctx.message_id
+                self._guanxing_window_expires_at = now + timedelta(
+                    seconds=self._GUANXING_VALID_SECONDS
+                )
+                return None
+
+            if (
+                self._guanxing_claim_active
+                and self._guanxing_own_command_msg_id is not None
+                and ctx.reply_to_msg_id == self._guanxing_own_command_msg_id
+                and "你今日已观星一次，天机不可多泄，请明日再来" in text
+            ):
+                self._clear_guanxing_claim_state()
+                return None
+
+            matched_event = self._match_guanxing_event(text)
+            if matched_event is not None:
+                if not self._is_own_guanxing_preview(ctx, text):
+                    await self._register_guanxing_claim(now, matched_event)
+                return None
 
         # ---- 周天星斗大阵：成功/邀请/助阵冷却 ----
         my_tag = self._my_tag()

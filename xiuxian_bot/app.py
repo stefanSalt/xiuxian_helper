@@ -140,6 +140,17 @@ async def run() -> None:
         *,
         reply_to_msg_id: int | None = None,
     ) -> int | None:
+        while xinggong.enabled:
+            wait_seconds = xinggong.send_block_delay_seconds(plugin, text)
+            if wait_seconds <= 0:
+                break
+            logger.debug(
+                "send_suppressed_for_guanxing plugin=%s wait_seconds=%.1f text=%s",
+                plugin,
+                wait_seconds,
+                text,
+            )
+            await asyncio.sleep(wait_seconds)
         mid = await sender.send(
             plugin,
             text,
@@ -180,6 +191,10 @@ async def run() -> None:
                 or (config.my_name in ctx.text)
                 or ("周天星斗大阵" in ctx.text)
                 or ("观星台" in ctx.text)
+                or ("星盘显化" in ctx.text)
+                or ("天机阁快报" in ctx.text)
+                or ("天机异动" in ctx.text)
+                or ("星移失败" in ctx.text)
             )
             if interesting:
                 logger.info("<< %s", _short_text(ctx.text))
