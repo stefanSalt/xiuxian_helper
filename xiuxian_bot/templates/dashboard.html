@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+{% block title %}账号面板{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>账号列表</h1>
+    <a href="/accounts/new" class="btn">新增账号</a>
+  </div>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>名称</th>
+        <th>启用</th>
+        <th>运行状态</th>
+        <th>游戏名</th>
+        <th>会话</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for account in accounts %}
+      {% set snapshot = snapshots.get(account.id) %}
+      <tr>
+        <td>{{ account.id }}</td>
+        <td>{{ account.name }}</td>
+        <td>{{ '是' if account.enabled else '否' }}</td>
+        <td>
+          {{ snapshot.state if snapshot else 'stopped' }}
+          {% if snapshot and snapshot.message %}<div class="muted">{{ snapshot.message }}</div>{% endif %}
+        </td>
+        <td>{{ account.config.my_name }}</td>
+        <td>{{ account.config.tg_session_name }}</td>
+        <td>
+          <div class="actions">
+            <a href="/accounts/{{ account.id }}/edit" class="btn btn-light">编辑</a>
+            <a href="/accounts/{{ account.id }}/logs" class="btn btn-light">日志</a>
+            <form method="post" action="/accounts/{{ account.id }}/toggle">
+              <button type="submit" class="btn btn-light">{{ '禁用' if account.enabled else '启用' }}</button>
+            </form>
+            <form method="post" action="/accounts/{{ account.id }}/start">
+              <button type="submit" class="btn btn-light">启动</button>
+            </form>
+            <form method="post" action="/accounts/{{ account.id }}/stop">
+              <button type="submit" class="btn btn-light">停止</button>
+            </form>
+            <form method="post" action="/accounts/{{ account.id }}/delete" onsubmit="return confirm('确定删除该账号吗？')">
+              <button type="submit" class="btn btn-danger">删除</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

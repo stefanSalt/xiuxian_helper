@@ -536,6 +536,30 @@ class TestXinggongPlugin(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(getattr(plugin, "_qizhen_blocked_until"))
         self.assertIsNotNone(getattr(plugin, "_qizhen_first_success_at"))
 
+    async def test_qizhen_cooldown_reply_for_pending_second_slot_recovers_second_success(self) -> None:
+        plugin = AutoXinggongPlugin(_dummy_config(), logging.getLogger("test"))
+
+        now = datetime.now()
+        first_success = now - timedelta(hours=13)
+        setattr(plugin, "_cycle_date", plugin._cycle_date_for(now))  # type: ignore[attr-defined]
+        setattr(plugin, "_qizhen_first_success_at", first_success)
+        setattr(plugin, "_qizhen_pending_slot", 2)
+        setattr(plugin, "_qizhen_last_sent_at", now - timedelta(seconds=10))
+
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=23,
+            reply_to_msg_id=22,
+            sender_id=999,
+            text="你刚刚参与过布阵，心神消耗巨大，请在11小时0分钟0秒后再次启阵。",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=True,
+        )
+        await plugin.on_message(ctx)
+        self.assertIsNotNone(getattr(plugin, "_qizhen_second_success_at"))
+        self.assertEqual(getattr(plugin, "_qizhen_pending_slot"), None)
+
     async def test_qizhen_cooldown_reply_recovers_passed_midpoint_immediately(self) -> None:
         plugin = AutoXinggongPlugin(
             _dummy_config(enable_xinggong_deep_biguan=True),

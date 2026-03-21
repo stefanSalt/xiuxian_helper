@@ -1,0 +1,35 @@
+{% extends 'base.html' %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>{{ title }}</h1>
+    <a href="/" class="btn btn-light">返回</a>
+  </div>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form method="post" action="{{ action }}" class="stack-form">
+    {% for section_title, fields in form_sections %}
+    <fieldset class="form-section">
+      <legend>{{ section_title }}</legend>
+      <div class="grid grid-2">
+        {% for field in fields %}
+        <label class="field {% if field.type == 'checkbox' %}checkbox-field{% endif %}">
+          {% if field.type == 'checkbox' %}
+          <input type="checkbox" name="{{ field.name }}" {% if values.get(field.name) %}checked{% endif %}>
+          <span>{{ field.label }}</span>
+          {% else %}
+          <span>{{ field.label }}</span>
+          <input type="{{ field.type }}" name="{{ field.name }}" value="{{ values.get(field.name, '') }}">
+          {% endif %}
+        </label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    {% endfor %}
+    <div class="actions">
+      <button type="submit" class="btn">保存</button>
+      <a href="/" class="btn btn-light">取消</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

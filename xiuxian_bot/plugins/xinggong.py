@@ -415,11 +415,15 @@ class AutoXinggongPlugin:
     ) -> tuple[datetime | None, int | None]:
         success_at = self._infer_qizhen_success_at(now, remaining_cooldown_seconds)
         cycle_start = self._cycle_start_dt(now)
-        earliest_second_success_at = cycle_start + timedelta(seconds=self._qizhen_second_offset_seconds)
+        pending_slot = self._qizhen_pending_slot
 
         if self._qizhen_first_success_at is None and self._qizhen_second_success_at is None:
-            if success_at >= earliest_second_success_at:
-                self._qizhen_first_success_at = cycle_start
+            if pending_slot == 2:
+                inferred_first_success_at = max(
+                    cycle_start,
+                    success_at - timedelta(seconds=self._qizhen_second_offset_seconds),
+                )
+                self._qizhen_first_success_at = inferred_first_success_at
                 self._qizhen_second_success_at = success_at
                 return success_at, 2
             self._qizhen_first_success_at = success_at
@@ -427,7 +431,7 @@ class AutoXinggongPlugin:
 
         if self._qizhen_first_success_at is not None and self._qizhen_second_success_at is None:
             second_start = self._qizhen_first_success_at + timedelta(seconds=self._qizhen_second_offset_seconds)
-            if success_at >= second_start or success_at >= earliest_second_success_at:
+            if pending_slot == 2 or success_at >= second_start:
                 self._qizhen_second_success_at = success_at
                 return success_at, 2
 
