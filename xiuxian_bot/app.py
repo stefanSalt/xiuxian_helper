@@ -10,6 +10,7 @@ from .core.dispatcher import Dispatcher
 from .core.rate_limit import RateLimiter
 from .core.reliable_sender import ReliableSender
 from .core.scheduler import Scheduler
+from .core.state_store import SQLiteStateStore
 from .tg_adapter import TGAdapter
 from .plugins.biguan import AutoBiguanPlugin
 from .plugins.daily import DailyPlugin
@@ -86,6 +87,7 @@ async def run() -> None:
     logger = _setup_logging(config.log_level)
 
     scheduler = Scheduler(logger)
+    state_store = SQLiteStateStore(config.state_db_path, logger)
     limiter = RateLimiter(
         global_per_minute=config.global_sends_per_minute,
         plugin_per_minute=config.plugin_sends_per_minute,
@@ -117,6 +119,15 @@ async def run() -> None:
         yuanying,
         zongmen,
     ]
+
+    for plugin in plugins:
+        bind = getattr(plugin, "set_state_store", None)
+        if callable(bind):
+            bind(state_store)
+        restore = getattr(plugin, "restore_state", None)
+        if callable(restore):
+            restore()
+
     dispatcher = Dispatcher(plugins, logger)
 
     recent_sent_ids: deque[int] = deque(maxlen=50)
@@ -210,12 +221,11 @@ async def run() -> None:
     adapter.on_message_edited(_on_event)
 
     await adapter.start()
-    if config.enable_garden:
-        # Bootstrap: send one status command so the plugin can start its poll loop.
-        await _send("garden", ".小药园", True)
+    if biguan.enabled:
+        await biguan.bootstrap(scheduler, _send)
+    if garden.enabled:
+        await garden.bootstrap(scheduler, _send)
     if xinggong.enabled:
-        # Bootstrap: send one status command so the plugin can start its poll loop.
-        await _send("xinggong", ".观星台", True)
         await xinggong.bootstrap(scheduler, _send)
     if yuanying.enabled:
         await yuanying.bootstrap(scheduler, _send)
@@ -228,6 +238,7 @@ async def run() -> None:
     finally:
         await scheduler.cancel_all()
         await adapter.stop()
+        state_store.close()
 
 
 def main() -> None:

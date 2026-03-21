@@ -140,6 +140,9 @@ class Config:
     # 全局发送节流
     global_send_min_interval_seconds: int = 10
 
+    # 持久化状态
+    state_db_path: str = "xiuxian_state.sqlite3"
+
     # 闯塔（日常）
     enable_chuangta: bool = False
     chuangta_time: str = "14:15"
@@ -241,6 +244,7 @@ class Config:
                 default="星辰异象,地磁暴动",
             ),
             global_send_min_interval_seconds=_get_env_int("GLOBAL_SEND_MIN_INTERVAL_SECONDS", default=10),
+            state_db_path=_get_env_str("STATE_DB_PATH", default="xiuxian_state.sqlite3"),
             enable_chuangta=_get_env_bool("ENABLE_CHUANGTA", default=False),
             chuangta_time=_get_env_str("CHUANGTA_TIME", default="14:15"),
         )

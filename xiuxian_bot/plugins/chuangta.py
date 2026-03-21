@@ -8,6 +8,13 @@ from typing import Awaitable, Callable
 from ..config import Config
 from ..core.contracts import MessageContext, SendAction
 from ..core.scheduler import Scheduler
+from ..core.state_store import (
+    SQLiteStateStore,
+    deserialize_date,
+    deserialize_datetime,
+    serialize_date,
+    serialize_datetime,
+)
 
 SendFn = Callable[[str, str, bool], Awaitable[int | None]]
 
@@ -32,6 +39,7 @@ class AutoChuangtaPlugin:
 
         self._scheduler: Scheduler | None = None
         self._send: SendFn | None = None
+        self._state_store: SQLiteStateStore | None = None
 
         self._current_day: date | None = None
         self._done_today = False
@@ -45,6 +53,43 @@ class AutoChuangtaPlugin:
         self._tower_sent_msg_id: int | None = None
 
         self._tower_hm = self._parse_hhmm(config.chuangta_time) if self.enabled else (0, 0)
+
+    def set_state_store(self, state_store: SQLiteStateStore) -> None:
+        self._state_store = state_store
+
+    def restore_state(self) -> None:
+        if self._state_store is None:
+            return
+        state = self._state_store.load_state(self.name)
+        self._current_day = deserialize_date(state.get("current_day"))
+        self._done_today = bool(state.get("done_today", False))
+        self._pending_today = bool(state.get("pending_today", False))
+        self._status_requested_at = deserialize_datetime(state.get("status_requested_at"))
+        msg_id = state.get("status_request_msg_id")
+        self._status_request_msg_id = int(msg_id) if msg_id is not None else None
+        self._yuanying_out_of_body = (
+            None if state.get("yuanying_out_of_body") is None else bool(state.get("yuanying_out_of_body"))
+        )
+        self._tower_sent_at = deserialize_datetime(state.get("tower_sent_at"))
+        tower_msg_id = state.get("tower_sent_msg_id")
+        self._tower_sent_msg_id = int(tower_msg_id) if tower_msg_id is not None else None
+
+    def _save_state(self) -> None:
+        if self._state_store is None:
+            return
+        self._state_store.save_state(
+            self.name,
+            {
+                "current_day": serialize_date(self._current_day),
+                "done_today": self._done_today,
+                "pending_today": self._pending_today,
+                "status_requested_at": serialize_datetime(self._status_requested_at),
+                "status_request_msg_id": self._status_request_msg_id,
+                "yuanying_out_of_body": self._yuanying_out_of_body,
+                "tower_sent_at": serialize_datetime(self._tower_sent_at),
+                "tower_sent_msg_id": self._tower_sent_msg_id,
+            },
+        )
 
     def _parse_hhmm(self, value: str) -> tuple[int, int]:
         match = self._HHMM_RE.match((value or "").strip())
@@ -62,10 +107,12 @@ class AutoChuangtaPlugin:
     def _clear_status_request(self) -> None:
         self._status_requested_at = None
         self._status_request_msg_id = None
+        self._save_state()
 
     def _clear_tower_tracking(self) -> None:
         self._tower_sent_at = None
         self._tower_sent_msg_id = None
+        self._save_state()
 
     def _reset_if_new_day(self, now: datetime) -> None:
         if self._current_day == now.date():
@@ -75,6 +122,7 @@ class AutoChuangtaPlugin:
         self._pending_today = False
         self._clear_status_request()
         self._clear_tower_tracking()
+        self._save_state()
 
     def _target_at(self, day: date) -> datetime:
         hour, minute = self._tower_hm
@@ -195,6 +243,7 @@ class AutoChuangtaPlugin:
         if self._done_today:
             return
         self._pending_today = True
+        self._save_state()
         if self._yuanying_enabled:
             await self._request_yuanying_status()
             return
@@ -207,17 +256,20 @@ class AutoChuangtaPlugin:
         msg_id = await self._send(self.name, self._CMD_YUANYING_STATUS, True)
         self._status_requested_at = requested_at
         self._status_request_msg_id = msg_id
+        self._save_state()
         await self._schedule_status_timeout(float(self._STATUS_REPLY_WINDOW_SECONDS))
 
     async def _send_chuangta(self) -> None:
         if self._send is None or self._done_today:
             return
         self._pending_today = False
-        self._clear_status_request()
         sent_at = datetime.now()
+        self._status_requested_at = None
+        self._status_request_msg_id = None
         msg_id = await self._send(self.name, self._CMD_CHUANGTA, True)
         self._tower_sent_at = sent_at
         self._tower_sent_msg_id = msg_id
+        self._save_state()
 
     async def _status_timeout_loop(self) -> None:
         if not self.enabled or self._done_today or not self._pending_today:
@@ -246,21 +298,26 @@ class AutoChuangtaPlugin:
             self._pending_today = False
             self._clear_status_request()
             self._clear_tower_tracking()
+            self._save_state()
             return None
 
         if self._chuqiao_summary(text):
             self._yuanying_out_of_body = False
+            self._save_state()
             if self._pending_today and not self._done_today:
                 self._pending_today = False
                 self._clear_status_request()
+                self._save_state()
                 return [self._send_tower_action()]
             return None
 
         if self._chuqiao_status_out_of_body(text):
             self._yuanying_out_of_body = True
+            self._save_state()
 
         if self._chuqiao_status_warming(text):
             self._yuanying_out_of_body = False
+            self._save_state()
 
         if not self._is_status_feedback(ctx, text, now):
             return None
@@ -275,7 +332,9 @@ class AutoChuangtaPlugin:
 
         if self._chuqiao_status_warming(text):
             self._pending_today = False
+            self._save_state()
             return [self._send_tower_action()]
 
         self._pending_today = False
+        self._save_state()
         return [self._send_tower_action()]

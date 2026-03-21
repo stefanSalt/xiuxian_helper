@@ -7,6 +7,14 @@ from datetime import date, datetime, timedelta
 from ..config import Config
 from ..core.contracts import MessageContext, SendAction
 from ..core.scheduler import Scheduler
+from ..core.state_store import (
+    SQLiteStateStore,
+    coerce_int,
+    deserialize_date,
+    deserialize_datetime,
+    serialize_date,
+    serialize_datetime,
+)
 from ..domain.xinggong import parse_xinggong_observatory
 
 
@@ -70,6 +78,7 @@ class AutoXinggongPlugin:
 
         self._scheduler: Scheduler | None = None
         self._send = None
+        self._state_store: SQLiteStateStore | None = None
 
         # Cycle state (a "day" starts at qizhen start time, not at midnight).
         self._cycle_date: date | None = None
@@ -97,6 +106,8 @@ class AutoXinggongPlugin:
         self._guanxing_preview_sent = False
         self._guanxing_shift_sent = False
         self._guanxing_detected_settlement_at: datetime | None = None
+        self._next_poll_at: datetime | None = None
+        self._wenan_next_at: datetime | None = None
 
         if self.enabled:
             self._logger.info(
@@ -113,6 +124,85 @@ class AutoXinggongPlugin:
                 self._guanxing_shift_advance_seconds,
                 self._wenan_interval_seconds,
             )
+
+    def set_state_store(self, state_store: SQLiteStateStore) -> None:
+        self._state_store = state_store
+
+    def restore_state(self) -> None:
+        if self._state_store is None:
+            return
+        state = self._state_store.load_state(self.name)
+        self._cycle_date = deserialize_date(state.get("cycle_date"))
+        self._qizhen_first_success_at = deserialize_datetime(state.get("qizhen_first_success_at"))
+        self._qizhen_second_success_at = deserialize_datetime(state.get("qizhen_second_success_at"))
+        self._qizhen_pending_slot = coerce_int(state.get("qizhen_pending_slot"))
+        self._qizhen_last_invite_msg_id = coerce_int(state.get("qizhen_last_invite_msg_id"))
+        self._qizhen_last_invite_slot = coerce_int(state.get("qizhen_last_invite_slot"))
+        self._qizhen_blocked_until = deserialize_datetime(state.get("qizhen_blocked_until"))
+        self._qizhen_next_cycle_at = deserialize_datetime(state.get("qizhen_next_cycle_at"))
+        self._qizhen_last_sent_at = deserialize_datetime(state.get("qizhen_last_sent_at"))
+        self._qizhen_existing_invite_until = deserialize_datetime(state.get("qizhen_existing_invite_until"))
+        self._assist_blocked_until = deserialize_datetime(state.get("assist_blocked_until"))
+        self._deep_biguan_status_msg_id = coerce_int(state.get("deep_biguan_status_msg_id"))
+        self._deep_biguan_status_requested_at = deserialize_datetime(
+            state.get("deep_biguan_status_requested_at")
+        )
+        reason = state.get("deep_biguan_status_reason")
+        self._deep_biguan_status_reason = reason if isinstance(reason, str) and reason else None
+        self._guanxing_claim_active = bool(state.get("guanxing_claim_active", False))
+        claim_event = state.get("guanxing_claim_event")
+        self._guanxing_claim_event = claim_event if isinstance(claim_event, str) and claim_event else None
+        self._guanxing_settlement_at = deserialize_datetime(state.get("guanxing_settlement_at"))
+        self._guanxing_window_expires_at = deserialize_datetime(state.get("guanxing_window_expires_at"))
+        self._guanxing_own_command_msg_id = coerce_int(state.get("guanxing_own_command_msg_id"))
+        self._guanxing_own_preview_msg_id = coerce_int(state.get("guanxing_own_preview_msg_id"))
+        self._guanxing_preview_sent = bool(state.get("guanxing_preview_sent", False))
+        self._guanxing_shift_sent = bool(state.get("guanxing_shift_sent", False))
+        self._guanxing_detected_settlement_at = deserialize_datetime(
+            state.get("guanxing_detected_settlement_at")
+        )
+        self._next_poll_at = deserialize_datetime(state.get("next_poll_at"))
+        self._wenan_next_at = deserialize_datetime(state.get("wenan_next_at"))
+        self._sanitize_restored_state()
+        self._save_state()
+
+    def _save_state(self) -> None:
+        if self._state_store is None:
+            return
+        self._state_store.save_state(
+            self.name,
+            {
+                "cycle_date": serialize_date(self._cycle_date),
+                "qizhen_first_success_at": serialize_datetime(self._qizhen_first_success_at),
+                "qizhen_second_success_at": serialize_datetime(self._qizhen_second_success_at),
+                "qizhen_pending_slot": self._qizhen_pending_slot,
+                "qizhen_last_invite_msg_id": self._qizhen_last_invite_msg_id,
+                "qizhen_last_invite_slot": self._qizhen_last_invite_slot,
+                "qizhen_blocked_until": serialize_datetime(self._qizhen_blocked_until),
+                "qizhen_next_cycle_at": serialize_datetime(self._qizhen_next_cycle_at),
+                "qizhen_last_sent_at": serialize_datetime(self._qizhen_last_sent_at),
+                "qizhen_existing_invite_until": serialize_datetime(self._qizhen_existing_invite_until),
+                "assist_blocked_until": serialize_datetime(self._assist_blocked_until),
+                "deep_biguan_status_msg_id": self._deep_biguan_status_msg_id,
+                "deep_biguan_status_requested_at": serialize_datetime(
+                    self._deep_biguan_status_requested_at
+                ),
+                "deep_biguan_status_reason": self._deep_biguan_status_reason,
+                "guanxing_claim_active": self._guanxing_claim_active,
+                "guanxing_claim_event": self._guanxing_claim_event,
+                "guanxing_settlement_at": serialize_datetime(self._guanxing_settlement_at),
+                "guanxing_window_expires_at": serialize_datetime(self._guanxing_window_expires_at),
+                "guanxing_own_command_msg_id": self._guanxing_own_command_msg_id,
+                "guanxing_own_preview_msg_id": self._guanxing_own_preview_msg_id,
+                "guanxing_preview_sent": self._guanxing_preview_sent,
+                "guanxing_shift_sent": self._guanxing_shift_sent,
+                "guanxing_detected_settlement_at": serialize_datetime(
+                    self._guanxing_detected_settlement_at
+                ),
+                "next_poll_at": serialize_datetime(self._next_poll_at),
+                "wenan_next_at": serialize_datetime(self._wenan_next_at),
+            },
+        )
 
     def _my_tag(self) -> str:
         name = self._config.my_name.strip()
@@ -152,6 +242,24 @@ class AutoXinggongPlugin:
         cycle_date = self._cycle_date_for(now)
         return now.replace(year=cycle_date.year, month=cycle_date.month, day=cycle_date.day, hour=hh, minute=mm, second=0, microsecond=0)
 
+    def _sanitize_restored_state(self) -> None:
+        now = datetime.now()
+        self._reset_if_new_cycle(now)
+        self._expire_guanxing_claim_if_needed(now)
+        if self._assist_blocked_until is not None and now >= self._assist_blocked_until:
+            self._assist_blocked_until = None
+        if (
+            self._qizhen_existing_invite_until is not None
+            and now >= self._qizhen_existing_invite_until
+        ):
+            self._qizhen_existing_invite_until = None
+        if (
+            self._deep_biguan_status_requested_at is not None
+            and (now - self._deep_biguan_status_requested_at).total_seconds()
+            > self._STATUS_REPLY_WINDOW_SECONDS
+        ):
+            self._clear_pending_biguan_status()
+
     def _clear_qizhen_cycle_state(
         self,
         *,
@@ -170,6 +278,7 @@ class AutoXinggongPlugin:
             self._qizhen_blocked_until = None
         self._assist_blocked_until = None
         self._clear_pending_biguan_status()
+        self._save_state()
 
     def _reset_if_new_cycle(self, now: datetime) -> None:
         if self._qizhen_next_cycle_at is not None and now >= self._qizhen_next_cycle_at:
@@ -208,6 +317,7 @@ class AutoXinggongPlugin:
         self._guanxing_own_preview_msg_id = None
         self._guanxing_preview_sent = False
         self._guanxing_shift_sent = False
+        self._save_state()
 
     def _expire_guanxing_claim_if_needed(self, now: datetime) -> None:
         if not self._guanxing_claim_active:
@@ -330,6 +440,7 @@ class AutoXinggongPlugin:
             self._qizhen_next_cycle_at = blocked_until
         else:
             self._qizhen_next_cycle_at = None
+        self._save_state()
 
     def _is_related_qizhen_feedback(self, ctx: MessageContext, now: datetime) -> bool:
         if ctx.is_reply_to_me:
@@ -342,11 +453,13 @@ class AutoXinggongPlugin:
 
     def _clear_qizhen_existing_invite_wait(self) -> None:
         self._qizhen_existing_invite_until = None
+        self._save_state()
 
     def _clear_pending_biguan_status(self) -> None:
         self._deep_biguan_status_msg_id = None
         self._deep_biguan_status_requested_at = None
         self._deep_biguan_status_reason = None
+        self._save_state()
 
     def _parse_deep_biguan_status(self, text: str) -> str | None:
         if "你并未处于深度闭关之中" in text:
@@ -424,15 +537,45 @@ class AutoXinggongPlugin:
         self._deep_biguan_status_requested_at = requested_at
         self._deep_biguan_status_msg_id = msg_id
         self._deep_biguan_status_reason = reason
+        self._save_state()
 
     async def bootstrap(self, scheduler: Scheduler, send) -> None:
         if not self.enabled:
             return
         self._scheduler = scheduler
         self._send = send
+        poll_delay_seconds = 0.0
+        if self._next_poll_at is not None:
+            poll_delay_seconds = max(0.0, (self._next_poll_at - datetime.now()).total_seconds())
+        await self._schedule_observatory_poll(poll_delay_seconds)
         await self._schedule_qizhen_loop(0.0)
         if self._wenan_enabled:
-            await self._schedule_wenan_loop(0.0)
+            wenan_delay_seconds = 0.0
+            if self._wenan_next_at is not None:
+                wenan_delay_seconds = max(0.0, (self._wenan_next_at - datetime.now()).total_seconds())
+            await self._schedule_wenan_loop(wenan_delay_seconds)
+        await self._restore_deep_biguan_schedule()
+        await self._restore_guanxing_schedules()
+
+    async def _schedule_observatory_poll(self, delay_seconds: float) -> None:
+        if self._scheduler is None:
+            return
+
+        async def _runner() -> None:
+            await self._observatory_poll_loop()
+
+        await self._scheduler.schedule(
+            key="xinggong.poll",
+            delay_seconds=max(0.0, delay_seconds),
+            action=_runner,
+        )
+
+    async def _observatory_poll_loop(self) -> None:
+        if not self.enabled or self._send is None:
+            return
+        self._next_poll_at = None
+        self._save_state()
+        await self._send(self.name, self._CMD_OBSERVATORY, True)
 
     async def _schedule_qizhen_loop(self, delay_seconds: float) -> None:
         if self._scheduler is None:
@@ -457,8 +600,49 @@ class AutoXinggongPlugin:
     async def _wenan_loop(self) -> None:
         if not self.enabled or not self._wenan_enabled or self._send is None:
             return
+        self._wenan_next_at = datetime.now() + timedelta(seconds=self._wenan_interval_seconds)
+        self._save_state()
         await self._send(self.name, self._CMD_WENAN, True)
         await self._schedule_wenan_loop(float(self._wenan_interval_seconds))
+
+    async def _restore_deep_biguan_schedule(self) -> None:
+        if not self._deep_biguan_enabled:
+            return
+        latest_success_at = self._qizhen_second_success_at or self._qizhen_first_success_at
+        if latest_success_at is None:
+            return
+        cooldown_end = latest_success_at + timedelta(
+            seconds=self._QIZHEN_COOLDOWN_SECONDS + self._QIZHEN_COOLDOWN_BUFFER_SECONDS
+        )
+        now = datetime.now()
+        if now >= cooldown_end:
+            return
+        await self._schedule_deep_biguan_after_qizhen_success(
+            latest_success_at,
+            now,
+            immediate_reason="restart_restore",
+        )
+
+    async def _restore_guanxing_schedules(self) -> None:
+        if (
+            not self._guanxing_enabled
+            or not self._guanxing_claim_active
+            or self._guanxing_settlement_at is None
+        ):
+            return
+        now = datetime.now()
+        shift_at = self._guanxing_settlement_at - timedelta(
+            seconds=self._guanxing_shift_advance_seconds
+        )
+        if not self._guanxing_preview_sent and self._guanxing_own_command_msg_id is None:
+            preview_at = self._guanxing_settlement_at - timedelta(
+                seconds=self._guanxing_preview_advance_seconds
+            )
+            await self._schedule_guanxing_preview(
+                max(0.0, (preview_at - now).total_seconds())
+            )
+        if not self._guanxing_shift_sent:
+            await self._schedule_guanxing_shift(max(0.0, (shift_at - now).total_seconds()))
 
     async def _schedule_guanxing_preview(self, delay_seconds: float) -> None:
         if self._scheduler is None:
@@ -512,6 +696,7 @@ class AutoXinggongPlugin:
         self._guanxing_preview_sent = False
         self._guanxing_shift_sent = False
         self._guanxing_detected_settlement_at = settlement_at
+        self._save_state()
 
         preview_at = settlement_at - timedelta(seconds=self._guanxing_preview_advance_seconds)
         preview_delay = max(0.0, (preview_at - now).total_seconds())
@@ -536,11 +721,13 @@ class AutoXinggongPlugin:
             self._clear_guanxing_claim_state()
             return
         self._guanxing_preview_sent = True
+        self._save_state()
         msg_id = await self._send(self.name, self._CMD_GUANXING, True)
         if msg_id is None:
             self._clear_guanxing_claim_state()
             return
         self._guanxing_own_command_msg_id = msg_id
+        self._save_state()
 
     async def _send_guanxing_shift(self) -> None:
         if (
@@ -564,6 +751,7 @@ class AutoXinggongPlugin:
             return
 
         self._guanxing_shift_sent = True
+        self._save_state()
         await self._send(
             self.name,
             f"{self._CMD_GAIHUAN} {self._guanxing_target_username}",
@@ -592,6 +780,7 @@ class AutoXinggongPlugin:
             self._clear_qizhen_existing_invite_wait()
             self._qizhen_pending_slot = 1
             self._qizhen_last_sent_at = now
+            self._save_state()
             await self._send(self.name, self._CMD_QIZHEN, True)
             await self._schedule_qizhen_loop(float(self._qizhen_retry_seconds))
             return
@@ -609,6 +798,7 @@ class AutoXinggongPlugin:
             self._clear_qizhen_existing_invite_wait()
             self._qizhen_pending_slot = 2
             self._qizhen_last_sent_at = now
+            self._save_state()
             await self._send(self.name, self._CMD_QIZHEN, True)
             await self._schedule_qizhen_loop(float(self._qizhen_retry_seconds))
             return
@@ -640,6 +830,7 @@ class AutoXinggongPlugin:
                 self._guanxing_window_expires_at = now + timedelta(
                     seconds=self._GUANXING_VALID_SECONDS
                 )
+                self._save_state()
                 return None
 
             if (
@@ -675,6 +866,7 @@ class AutoXinggongPlugin:
                 self._set_qizhen_cooldown_from_success(recovered_success_at, slot=recovered_slot)
             # Stop retries; schedule the next loop at cooldown end.
             self._qizhen_pending_slot = None
+            self._save_state()
             if recovered_success_at is not None:
                 await self._schedule_deep_biguan_after_qizhen_success(
                     recovered_success_at,
@@ -689,6 +881,7 @@ class AutoXinggongPlugin:
             if not self._is_related_qizhen_feedback(ctx, now):
                 return None
             self._qizhen_existing_invite_until = now + timedelta(seconds=self._QIZHEN_EXISTING_INVITE_WAIT_SECONDS)
+            self._save_state()
             if self._scheduler is not None:
                 await self._schedule_qizhen_loop(
                     max(0.0, (self._qizhen_existing_invite_until - now).total_seconds())
@@ -701,6 +894,7 @@ class AutoXinggongPlugin:
                 self._clear_qizhen_existing_invite_wait()
                 self._qizhen_last_invite_msg_id = ctx.message_id
                 self._qizhen_last_invite_slot = self._qizhen_pending_slot
+                self._save_state()
             else:
                 # Others' invite -> try assist (no reply needed per your group rules).
                 if self._assist_blocked_until is not None and now < self._assist_blocked_until:
@@ -720,6 +914,7 @@ class AutoXinggongPlugin:
             rem = self._parse_duration_seconds(text)
             if rem is not None:
                 self._assist_blocked_until = now + timedelta(seconds=rem + 5)
+                self._save_state()
             return None
 
         if "周天星斗大阵-成" in text or ("大阵已成" in text and "周天星斗大阵" in text):
@@ -734,6 +929,7 @@ class AutoXinggongPlugin:
                 self._set_qizhen_cooldown_from_success(now, slot=success_slot)
                 self._clear_qizhen_existing_invite_wait()
                 self._qizhen_pending_slot = None
+                self._save_state()
                 # Recompute the schedule immediately (cancels pending retries via key override).
                 if self._scheduler is not None:
                     await self._schedule_qizhen_loop(0.0)
@@ -778,6 +974,8 @@ class AutoXinggongPlugin:
 
         # ---- 观星台：动作回包（安抚/收集） -> 立即复查状态 ----
         if "成功安抚了" in text and "引星盘" in text:
+            self._next_poll_at = now + timedelta(seconds=self._spacing_seconds)
+            self._save_state()
             return [
                 SendAction(
                     plugin=self.name,
@@ -789,6 +987,8 @@ class AutoXinggongPlugin:
             ]
 
         if "成功从" in text and "收集" in text and "星辰精华" in text:
+            self._next_poll_at = now + timedelta(seconds=self._spacing_seconds)
+            self._save_state()
             return [
                 SendAction(
                     plugin=self.name,
@@ -805,6 +1005,8 @@ class AutoXinggongPlugin:
             return None
 
         poll_delay_seconds = self._next_poll_delay_seconds(status)
+        self._next_poll_at = now + timedelta(seconds=poll_delay_seconds)
+        self._save_state()
         actions: list[SendAction] = [
             SendAction(
                 plugin=self.name,

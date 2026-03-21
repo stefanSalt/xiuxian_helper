@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
+from typing import Awaitable, Callable
 
 from ..config import Config
 from ..core.contracts import MessageContext, SendAction
+from ..core.scheduler import Scheduler
+from ..core.state_store import SQLiteStateStore, deserialize_datetime, serialize_datetime
 from ..domain.garden import parse_garden_status
+
+SendFn = Callable[[str, str, bool], Awaitable[int | None]]
 
 
 class AutoGardenPlugin:
@@ -31,10 +36,14 @@ class AutoGardenPlugin:
         self._config = config
         self._logger = logger
         self.enabled = config.enable_garden
+        self._scheduler: Scheduler | None = None
+        self._send: SendFn | None = None
+        self._state_store: SQLiteStateStore | None = None
 
         self._seed_insufficient = False
         self._seed_insufficient_warned = False
         self._sow_blocked_no_idle = False
+        self._next_poll_at: datetime | None = None
 
         if self.enabled:
             self._logger.info(
@@ -42,6 +51,31 @@ class AutoGardenPlugin:
                 self._config.garden_poll_interval_seconds,
                 self._config.garden_seed_name,
             )
+
+    def set_state_store(self, state_store: SQLiteStateStore) -> None:
+        self._state_store = state_store
+
+    def restore_state(self) -> None:
+        if self._state_store is None:
+            return
+        state = self._state_store.load_state(self.name)
+        self._seed_insufficient = bool(state.get("seed_insufficient", False))
+        self._seed_insufficient_warned = bool(state.get("seed_insufficient_warned", False))
+        self._sow_blocked_no_idle = bool(state.get("sow_blocked_no_idle", False))
+        self._next_poll_at = deserialize_datetime(state.get("next_poll_at"))
+
+    def _save_state(self) -> None:
+        if self._state_store is None:
+            return
+        self._state_store.save_state(
+            self.name,
+            {
+                "seed_insufficient": self._seed_insufficient,
+                "seed_insufficient_warned": self._seed_insufficient_warned,
+                "sow_blocked_no_idle": self._sow_blocked_no_idle,
+                "next_poll_at": serialize_datetime(self._next_poll_at),
+            },
+        )
 
     def _sow_cmd(self) -> str:
         return f".播种 {self._config.garden_seed_name}"
@@ -56,6 +90,36 @@ class AutoGardenPlugin:
         delay = max(1.0, min(base, delay))
         return delay
 
+    async def bootstrap(self, scheduler: Scheduler, send: SendFn) -> None:
+        if not self.enabled:
+            return
+        self._scheduler = scheduler
+        self._send = send
+        delay_seconds = 0.0
+        if self._next_poll_at is not None:
+            delay_seconds = max(0.0, (self._next_poll_at - datetime.now()).total_seconds())
+        await self._schedule_poll(delay_seconds)
+
+    async def _schedule_poll(self, delay_seconds: float) -> None:
+        if self._scheduler is None:
+            return
+
+        async def _runner() -> None:
+            await self._poll_loop()
+
+        await self._scheduler.schedule(
+            key="garden.poll",
+            delay_seconds=max(0.0, delay_seconds),
+            action=_runner,
+        )
+
+    async def _poll_loop(self) -> None:
+        if not self.enabled or self._send is None:
+            return
+        self._next_poll_at = None
+        self._save_state()
+        await self._send(self.name, self._CMD_STATUS, True)
+
     async def on_message(self, ctx: MessageContext) -> list[SendAction] | None:
         text = (ctx.text or "").strip()
         if not text:
@@ -68,6 +132,7 @@ class AutoGardenPlugin:
         # ---- Command replies (heuristic, keyword-based) ----
         if "你的药园中已无空闲的灵田" in text:
             self._sow_blocked_no_idle = True
+            self._save_state()
             return None
 
         if "数量不足" in text and "种子" in text:
@@ -79,15 +144,18 @@ class AutoGardenPlugin:
                     self._config.garden_seed_name,
                     text,
                 )
+            self._save_state()
             return None
 
         if "播种成功" in text:
             self._sow_blocked_no_idle = False
+            self._save_state()
             return None
 
         if "一键采药完成" in text:
             # Harvesting usually creates idle plots right away, so try sowing once.
             self._sow_blocked_no_idle = False
+            self._save_state()
             if self._seed_insufficient:
                 return None
             return [
@@ -116,6 +184,8 @@ class AutoGardenPlugin:
                 eta.isoformat(timespec="seconds"),
                 check_at.isoformat(timespec="seconds"),
             )
+        self._next_poll_at = datetime.now() + timedelta(seconds=poll_delay_seconds)
+        self._save_state()
 
         actions: list[SendAction] = [
             # Keep a single poll scheduled; the scheduler key will override older ones.

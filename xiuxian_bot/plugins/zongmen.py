@@ -8,6 +8,11 @@ from typing import Awaitable, Callable
 from ..config import Config
 from ..core.contracts import MessageContext, SendAction
 from ..core.scheduler import Scheduler
+from ..core.state_store import (
+    SQLiteStateStore,
+    deserialize_date,
+    serialize_date,
+)
 
 
 SendFn = Callable[[str, str, bool], Awaitable[int | None]]
@@ -37,6 +42,7 @@ class AutoZongmenPlugin:
         self._chuangong_hms = (
             self._parse_hhmm_list(config.zongmen_chuangong_times) if self.enabled else [(0, 0), (0, 0), (0, 0)]
         )
+        self._state_store: SQLiteStateStore | None = None
 
         self._state_date: date | None = None
         self._dianmao_done = False
@@ -52,6 +58,34 @@ class AutoZongmenPlugin:
                 self._catch_up,
             )
 
+    def set_state_store(self, state_store: SQLiteStateStore) -> None:
+        self._state_store = state_store
+
+    def restore_state(self) -> None:
+        if self._state_store is None:
+            return
+        state = self._state_store.load_state(self.name)
+        self._state_date = deserialize_date(state.get("state_date"))
+        count = state.get("chuangong_count")
+        self._dianmao_done = bool(state.get("dianmao_done", False))
+        self._chuangong_count = int(count) if count is not None else 0
+        self._chuangong_disabled = bool(state.get("chuangong_disabled", False))
+        self._chuangong_pending = bool(state.get("chuangong_pending", False))
+
+    def _save_state(self) -> None:
+        if self._state_store is None:
+            return
+        self._state_store.save_state(
+            self.name,
+            {
+                "state_date": serialize_date(self._state_date),
+                "dianmao_done": self._dianmao_done,
+                "chuangong_count": self._chuangong_count,
+                "chuangong_disabled": self._chuangong_disabled,
+                "chuangong_pending": self._chuangong_pending,
+            },
+        )
+
     def _reset_if_new_day(self, now: datetime) -> None:
         today = now.date()
         if self._state_date == today:
@@ -61,6 +95,7 @@ class AutoZongmenPlugin:
         self._chuangong_count = 0
         self._chuangong_disabled = False
         self._chuangong_pending = False
+        self._save_state()
 
     def _parse_hhmm(self, raw: str | None) -> tuple[int, int]:
         if raw is None:
@@ -123,18 +158,21 @@ class AutoZongmenPlugin:
 
         if "点卯成功" in text or "今日已点卯" in text:
             self._dianmao_done = True
+            self._save_state()
             return None
 
         if "此神通需回复你的一条有价值的发言" in text:
             # Avoid spamming if our reply strategy doesn't work in this group.
             self._chuangong_pending = False
             self._chuangong_disabled = True
+            self._save_state()
             self._logger.warning("zongmen_chuangong_disabled reason=need_reply_hint text=%r", text)
             return None
 
         if "每日最多传功" in text or "你今日传功过于频繁" in text:
             self._chuangong_pending = False
             self._chuangong_count = 3
+            self._save_state()
             return None
 
         match = self._CG_COUNT_RE.search(text)
@@ -147,6 +185,7 @@ class AutoZongmenPlugin:
             if total == 3 and 0 <= count <= 3:
                 self._chuangong_pending = False
                 self._chuangong_count = count
+                self._save_state()
         return None
 
     async def bootstrap(self, scheduler: Scheduler, send) -> None:
@@ -260,12 +299,13 @@ class AutoZongmenPlugin:
             return "defer"
 
         self._chuangong_pending = True
+        self._save_state()
         mid = await send(self.name, self._xinde_for_send(), True)
         if mid is None:
             self._chuangong_pending = False
+            self._save_state()
             self._logger.warning("zongmen_chuangong_abort reason=no_mid")
             return "skip"
 
         await send(self.name, self._cmd_chuangong, True, reply_to_msg_id=mid)
         return "sent"
-

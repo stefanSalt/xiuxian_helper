@@ -8,6 +8,7 @@ from typing import Awaitable, Callable
 from ..config import Config
 from ..core.contracts import MessageContext, SendAction
 from ..core.scheduler import Scheduler
+from ..core.state_store import SQLiteStateStore, deserialize_datetime, serialize_datetime
 
 SendFn = Callable[[str, str, bool], Awaitable[int | None]]
 
@@ -34,6 +35,7 @@ class AutoYuanyingPlugin:
 
         self._scheduler: Scheduler | None = None
         self._send: SendFn | None = None
+        self._state_store: SQLiteStateStore | None = None
         self._liefeng_blocked_until: datetime | None = None
         self._chuqiao_blocked_until: datetime | None = None
         self._chuqiao_waiting_settle = False
@@ -46,6 +48,29 @@ class AutoYuanyingPlugin:
                 self._liefeng_interval_seconds,
                 self._chuqiao_interval_seconds,
             )
+
+    def set_state_store(self, state_store: SQLiteStateStore) -> None:
+        self._state_store = state_store
+
+    def restore_state(self) -> None:
+        if self._state_store is None:
+            return
+        state = self._state_store.load_state(self.name)
+        self._liefeng_blocked_until = deserialize_datetime(state.get("liefeng_blocked_until"))
+        self._chuqiao_blocked_until = deserialize_datetime(state.get("chuqiao_blocked_until"))
+        self._chuqiao_waiting_settle = bool(state.get("chuqiao_waiting_settle", False))
+
+    def _save_state(self) -> None:
+        if self._state_store is None:
+            return
+        self._state_store.save_state(
+            self.name,
+            {
+                "liefeng_blocked_until": serialize_datetime(self._liefeng_blocked_until),
+                "chuqiao_blocked_until": serialize_datetime(self._chuqiao_blocked_until),
+                "chuqiao_waiting_settle": self._chuqiao_waiting_settle,
+            },
+        )
 
     def _is_mine(self, ctx: MessageContext, text: str) -> bool:
         return bool(ctx.is_reply_to_me or (self._config.my_name and self._config.my_name in text))
@@ -136,6 +161,7 @@ class AutoYuanyingPlugin:
         if self._chuqiao_waiting_settle:
             await self._send(self.name, self._CMD_CHUQIAO_SETTLE, True)
             self._chuqiao_waiting_settle = False
+            self._save_state()
             await self._schedule_chuqiao_loop(float(self._SUMMARY_RECHECK_SECONDS))
             return
 
@@ -144,10 +170,12 @@ class AutoYuanyingPlugin:
 
     async def _set_liefeng_next(self, delay_seconds: float) -> None:
         self._liefeng_blocked_until = datetime.now() + timedelta(seconds=delay_seconds)
+        self._save_state()
         await self._schedule_liefeng_loop(delay_seconds)
 
     async def _set_chuqiao_next(self, delay_seconds: float) -> None:
         self._chuqiao_blocked_until = datetime.now() + timedelta(seconds=delay_seconds)
+        self._save_state()
         await self._schedule_chuqiao_loop(delay_seconds)
 
     async def on_message(self, ctx: MessageContext) -> list[SendAction] | None:
@@ -196,6 +224,7 @@ class AutoYuanyingPlugin:
         if "状态:窍中温养" in compact:
             self._chuqiao_waiting_settle = False
             self._chuqiao_blocked_until = None
+            self._save_state()
             return [
                 SendAction(
                     plugin=self.name,
@@ -209,6 +238,7 @@ class AutoYuanyingPlugin:
         if "元神归窍总结" in text:
             self._chuqiao_waiting_settle = False
             self._chuqiao_blocked_until = None
+            self._save_state()
             return [
                 SendAction(
                     plugin=self.name,
