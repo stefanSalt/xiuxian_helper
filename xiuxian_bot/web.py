@@ -316,6 +316,16 @@ def create_app() -> FastAPI:
         response.delete_cookie("xiuxian_admin")
         return response
 
+    @app.get("/healthz")
+    async def healthz(request: Request):
+        repository: AccountRepository = request.app.state.repository
+        manager: RunnerManager = request.app.state.runner_manager
+        return {
+            "status": "ok",
+            "accounts": repository.count_accounts(),
+            "running_accounts": len(manager.snapshots()),
+        }
+
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request):
         system_config: SystemConfig = request.app.state.system_config

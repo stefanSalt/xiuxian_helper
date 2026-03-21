@@ -304,3 +304,27 @@ class TestWebApp(unittest.TestCase):
                     dashboard = client.get("/")
                     self.assertEqual(dashboard.status_code, 200)
                     self.assertIn("bot-1", dashboard.text)
+
+    def test_healthz_returns_ok_without_auth(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from xiuxian_bot.web import create_app
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            system_config = SystemConfig(
+                app_db_path=str(tmp_path / "app.sqlite3"),
+                log_dir=str(tmp_path / "logs"),
+                web_admin_username="admin",
+                web_admin_password="secret",
+                web_secret_key="secret-key",
+            )
+
+            with patch("xiuxian_bot.web.SystemConfig.load", return_value=system_config), patch(
+                "xiuxian_bot.web.AccountRepository.ensure_legacy_account",
+                return_value=None,
+            ):
+                with TestClient(create_app()) as client:
+                    response = client.get("/healthz")
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(response.json()["status"], "ok")

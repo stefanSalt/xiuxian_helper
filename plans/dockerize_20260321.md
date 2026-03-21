@@ -43,9 +43,12 @@
 - [x] 新增/调整会话持久化路径配置，避免 `.session` 落到容器临时层
 - [x] 更新 `.env.example` / `README.md`
 - [x] 进行本地最小验证
+- [x] 增加 Web 健康检查端点与容器 healthcheck
+- [x] 验证容器健康状态
 
 ## 验证结果
-- [x] `python3 -m unittest` 通过：`82 passed / 3 skipped`
-- [x] `./venv/bin/python -m unittest` 通过：`82 passed`
+- [x] `python3 -m unittest` 通过：`83 passed / 4 skipped`
+- [x] `./venv/bin/python -m unittest` 通过：`83 passed`
 - [x] `docker compose config` 通过
 - [x] `docker compose build` 通过
+- [x] 临时容器健康检查通过：`/healthz -> 200`，容器状态 `healthy`

@@ -180,6 +180,19 @@ docker compose down
 docker compose logs -f
 ```
 
+### 健康检查
+
+镜像内已内置健康检查，请求：
+- `GET /healthz`
+
+查看状态：
+
+```bash
+docker compose ps
+# 或
+docker inspect --format='{{json .State.Health}}' xiuxian-helper
+```
+
 > 注意：容器里已强制注入 `WEB_HOST=0.0.0.0`、`WEB_PORT=11111`、`APP_DB_PATH=/app/data/xiuxian_app.sqlite3`、`LOG_DIR=/app/data/logs`、`SESSION_ROOT_DIR=/app/data/sessions`，因此不需要你在 `.env` 里再手动写一遍这些 Docker 专用路径。
 
 ## systemd 示例

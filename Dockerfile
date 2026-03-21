@@ -23,4 +23,7 @@ RUN mkdir -p /app/data /app/data/logs /app/data/sessions
 
 EXPOSE 11111
 
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+  CMD ["python", "-c", "import os, urllib.request; port = os.getenv('WEB_PORT', '11111'); urllib.request.urlopen(f'http://127.0.0.1:{port}/healthz', timeout=3)"]
+
 CMD ["python", "xiuxian.py"]
