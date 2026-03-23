@@ -69,12 +69,13 @@ class TGAdapter:
         reply_to_msg_id: int | None = None,
     ) -> int | None:
         if reply_to_topic and self._config.send_to_topic:
-            # Send into a forum topic without replying to any specific message.
+            topic_reply_to_msg_id = reply_to_msg_id or self._config.topic_id
+            # Forum topic messages are anchored to the topic starter message ID.
             request = functions.messages.SendMessageRequest(
                 peer=self._peer,
                 message=text,
                 reply_to=types.InputReplyToMessage(
-                    reply_to_msg_id=reply_to_msg_id or 0,
+                    reply_to_msg_id=topic_reply_to_msg_id,
                     top_msg_id=self._config.topic_id,
                 ),
             )
