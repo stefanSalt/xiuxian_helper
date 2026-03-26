@@ -15,6 +15,7 @@ from ..core.state_store import (
     serialize_date,
     serialize_datetime,
 )
+from ..domain.text_normalizer import normalize_match_text
 from ..domain.xinggong import parse_xinggong_observatory
 
 
@@ -45,6 +46,13 @@ class AutoXinggongPlugin:
     _DEEP_BIGUAN_KEEP_REASON = "post_buff_keep"
     _STATUS_REPLY_WINDOW_SECONDS = 120
     _GUANXING_VALID_SECONDS = 300
+    _GUANXING_PREVIEW_ANCHOR = normalize_match_text("星盘显化")
+    _GUANXING_NEXT_EVOLUTION_ANCHOR = normalize_match_text("下一次天道演化")
+    _GUANXING_DESTINY_ANCHOR = normalize_match_text("当前天命所归")
+    _GUANXING_ANOMALY_ANCHOR = normalize_match_text("天机异动")
+    _GUANXING_SHIFT_ANCHOR = normalize_match_text("改换星移")
+    _GUANXING_ORIGINAL_DESTINY_ANCHOR = normalize_match_text("原本将降临于")
+    _GUANXING_FAILURE_ANCHOR = normalize_match_text("你今日已观星一次，天机不可多泄，请明日再来")
 
     _HHMM_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*$")
 
@@ -72,6 +80,9 @@ class AutoXinggongPlugin:
         )
         self._guanxing_watch_events = self._parse_watch_events(
             config.xinggong_guanxing_watch_events
+        )
+        self._guanxing_watch_event_keys = tuple(
+            normalize_match_text(event_name) for event_name in self._guanxing_watch_events
         )
 
         self._qizhen_hm = self._parse_hhmm(config.xinggong_qizhen_start_time)
@@ -340,13 +351,30 @@ class AutoXinggongPlugin:
         return now < (window_start + timedelta(seconds=self._GUANXING_VALID_SECONDS))
 
     def _is_guanxing_preview(self, text: str) -> bool:
-        return "【星盘显化】" in text
+        normalized = normalize_match_text(text)
+        return self._GUANXING_PREVIEW_ANCHOR in normalized or (
+            self._GUANXING_NEXT_EVOLUTION_ANCHOR in normalized
+            and self._GUANXING_DESTINY_ANCHOR in normalized
+        )
 
     def _match_guanxing_event(self, text: str) -> str | None:
-        if not self._is_guanxing_preview(text):
+        normalized = normalize_match_text(text)
+        is_preview_like = self._is_guanxing_preview(text)
+        is_anomaly_like = (
+            self._GUANXING_ANOMALY_ANCHOR in normalized
+            and (
+                self._GUANXING_SHIFT_ANCHOR in normalized
+                or self._GUANXING_ORIGINAL_DESTINY_ANCHOR in normalized
+            )
+        )
+        if not is_preview_like and not is_anomaly_like:
             return None
-        for event_name in self._guanxing_watch_events:
-            if event_name and event_name in text:
+        for event_name, event_key in zip(
+            self._guanxing_watch_events,
+            self._guanxing_watch_event_keys,
+            strict=False,
+        ):
+            if event_key and event_key in normalized:
                 return event_name
         return None
 
@@ -855,7 +883,7 @@ class AutoXinggongPlugin:
                 self._guanxing_claim_active
                 and self._guanxing_own_command_msg_id is not None
                 and ctx.reply_to_msg_id == self._guanxing_own_command_msg_id
-                and "你今日已观星一次，天机不可多泄，请明日再来" in text
+                and self._GUANXING_FAILURE_ANCHOR in normalize_match_text(text)
             ):
                 self._clear_guanxing_claim_state()
                 return None

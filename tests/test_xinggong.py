@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from xiuxian_bot.config import Config
 from xiuxian_bot.core.contracts import MessageContext
+from xiuxian_bot.domain.text_normalizer import normalize_match_text
 from xiuxian_bot.domain.xinggong import parse_xinggong_observatory
 from xiuxian_bot.plugins.xinggong import AutoXinggongPlugin
 
@@ -75,6 +76,13 @@ def _dummy_config(
 
 
 class TestXinggongParser(unittest.TestCase):
+    def test_normalize_match_text_handles_ocr_spacing_and_symbols(self) -> None:
+        text = "【 天机异动 】\n下一次 天道演化 将是： 【Ｇood · 星辰 异象】\u200b 当前天命所归：@Salt9527"
+        self.assertEqual(
+            normalize_match_text(text),
+            "天机异动下一次天道演化将是good星辰异象当前天命所归@salt9527",
+        )
+
     def test_parse_observatory_idle(self) -> None:
         text = """【星宫 · 观星台】 (引星盘总数: 3座)
 1号引星盘: 空闲
@@ -256,6 +264,31 @@ class TestXinggongPlugin(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(actions)
         self.assertEqual(getattr(plugin, "_guanxing_own_preview_msg_id"), 8002)
 
+    async def test_personal_preview_reply_ocr_variant_still_becomes_shift_reply_target(self) -> None:
+        plugin = AutoXinggongPlugin(
+            _dummy_config(enable_xinggong_guanxing=True),
+            logging.getLogger("test"),
+        )
+        now = datetime.now()
+        plugin._guanxing_settlement_at = now + timedelta(minutes=1)  # type: ignore[attr-defined]
+        plugin._guanxing_claim_active = True  # type: ignore[attr-defined]
+        plugin._guanxing_own_command_msg_id = 8011  # type: ignore[attr-defined]
+
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=8012,
+            reply_to_msg_id=8011,
+            sender_id=999,
+            text="星 盘 显 化\n@Me 闭目凝神，推演天机...\n下一次 天道演化 将是： 【Ｇood - 星辰 异象】\n当前 天命所归：@someone",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=True,
+        )
+        actions = await plugin.on_message(ctx)
+
+        self.assertIsNone(actions)
+        self.assertEqual(getattr(plugin, "_guanxing_own_preview_msg_id"), 8012)
+
     async def test_shift_send_replies_to_personal_preview_message(self) -> None:
         plugin = AutoXinggongPlugin(
             _dummy_config(enable_xinggong_guanxing=True),
@@ -317,6 +350,44 @@ class TestXinggongPlugin(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(actions)
         self.assertFalse(getattr(plugin, "_guanxing_claim_active"))
+
+    async def test_external_anomaly_message_registers_claim_with_ocr_variants(self) -> None:
+        plugin = AutoXinggongPlugin(
+            _dummy_config(enable_xinggong_guanxing=True),
+            logging.getLogger("test"),
+        )
+
+        scheduled: list[tuple[str, float]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                scheduled.append((key, delay_seconds))
+
+        async def _send(_plugin: str, text: str, reply_to_topic: bool, *, reply_to_msg_id=None):
+            return 7001
+
+        plugin._scheduler = _FakeScheduler()  # type: ignore[attr-defined]
+        plugin._send = _send  # type: ignore[attr-defined]
+        plugin._should_ignore_external_guanxing_preview = lambda _now: False  # type: ignore[attr-defined]
+
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=9150,
+            reply_to_msg_id=123,
+            sender_id=999,
+            text="【 天机异动 】 星盘光芒大作！【星宫】弟子 @foo 强行施展【改换星移】之术，竟成功扭转了天机！ 原本将降临于 @bar 身上的【Ｇood - 星辰 异象】，现已改道，将由 @baz 承受！",
+            ts=datetime.now(timezone.utc),
+            is_reply=False,
+            is_reply_to_me=False,
+        )
+        actions = await plugin.on_message(ctx)
+
+        self.assertIsNone(actions)
+        keys = {key for key, _ in scheduled}
+        self.assertIn("xinggong.guanxing.preview", keys)
+        self.assertIn("xinggong.guanxing.shift", keys)
+        self.assertTrue(getattr(plugin, "_guanxing_claim_active"))
+        self.assertEqual(getattr(plugin, "_guanxing_claim_event"), "星辰异象")
 
     async def test_external_preview_in_new_window_grace_period_is_ignored(self) -> None:
         plugin = AutoXinggongPlugin(
