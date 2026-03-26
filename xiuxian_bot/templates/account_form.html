@@ -19,7 +19,7 @@
           <span>{{ field.label }}</span>
           {% else %}
           <span>{{ field.label }}</span>
-          <input type="{{ field.type }}" name="{{ field.name }}" value="{{ values.get(field.name, '') }}">
+          <input type="{{ field.type }}" name="{{ field.name }}" value="{{ values.get(field.name, '') }}"{% if field.step is defined %} step="{{ field.step }}"{% endif %}>
           {% endif %}
         </label>
         {% endfor %}

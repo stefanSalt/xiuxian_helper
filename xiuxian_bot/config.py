@@ -49,6 +49,18 @@ def _get_env_int(key: str, *, default: int | None = None) -> int:
         raise ValueError(f"Invalid int env var {key}={value!r}") from exc
 
 
+def _get_env_float(key: str, *, default: float | None = None) -> float:
+    value = _env(key)
+    if value is None:
+        if default is None:
+            raise ValueError(f"Missing required env var: {key}")
+        return default
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ValueError(f"Invalid float env var {key}={value!r}") from exc
+
+
 def _get_env_bool(key: str, *, default: bool = False) -> bool:
     value = _env(key)
     if value is None:
@@ -74,6 +86,13 @@ def _parse_int(value: Any, label: str) -> int:
         return int(str(value).strip())
     except (TypeError, ValueError) as exc:
         raise ValueError(f"Invalid int value for {label}={value!r}") from exc
+
+
+def _parse_float(value: Any, label: str) -> float:
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid float value for {label}={value!r}") from exc
 
 
 def _parse_optional_str(value: Any) -> str | None:
@@ -201,7 +220,7 @@ class Config:
     enable_xinggong_guanxing: bool = False
     xinggong_guanxing_target_username: str = "salt9527"
     xinggong_guanxing_preview_advance_seconds: int = 180
-    xinggong_guanxing_shift_advance_seconds: int = 1
+    xinggong_guanxing_shift_advance_seconds: float = 1.0
     xinggong_guanxing_watch_events: str = "星辰异象,地磁暴动"
 
     # Send spacing
@@ -360,7 +379,7 @@ class Config:
                 data.get("xinggong_guanxing_preview_advance_seconds", 180),
                 "xinggong_guanxing_preview_advance_seconds",
             ),
-            xinggong_guanxing_shift_advance_seconds=_parse_int(
+            xinggong_guanxing_shift_advance_seconds=_parse_float(
                 data.get("xinggong_guanxing_shift_advance_seconds", 1),
                 "xinggong_guanxing_shift_advance_seconds",
             ),
@@ -486,9 +505,9 @@ class Config:
                 "XINGGONG_GUANXING_PREVIEW_ADVANCE_SECONDS",
                 default=180,
             ),
-            "xinggong_guanxing_shift_advance_seconds": _get_env_int(
+            "xinggong_guanxing_shift_advance_seconds": _get_env_float(
                 "XINGGONG_GUANXING_SHIFT_ADVANCE_SECONDS",
-                default=1,
+                default=1.0,
             ),
             "xinggong_guanxing_watch_events": _get_env_str(
                 "XINGGONG_GUANXING_WATCH_EVENTS",

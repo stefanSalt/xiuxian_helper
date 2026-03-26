@@ -46,6 +46,7 @@ class AutoXinggongPlugin:
     _DEEP_BIGUAN_KEEP_REASON = "post_buff_keep"
     _STATUS_REPLY_WINDOW_SECONDS = 120
     _GUANXING_VALID_SECONDS = 300
+    _GUANXING_SHIFT_EXECUTION_GRACE_SECONDS = 1.0
     _GUANXING_PREVIEW_ANCHOR = normalize_match_text("星盘显化")
     _GUANXING_NEXT_EVOLUTION_ANCHOR = normalize_match_text("下一次天道演化")
     _GUANXING_DESTINY_ANCHOR = normalize_match_text("当前天命所归")
@@ -75,8 +76,8 @@ class AutoXinggongPlugin:
         self._guanxing_preview_advance_seconds = max(
             1, int(config.xinggong_guanxing_preview_advance_seconds)
         )
-        self._guanxing_shift_advance_seconds = max(
-            1, int(config.xinggong_guanxing_shift_advance_seconds)
+        self._guanxing_shift_advance_seconds = float(
+            config.xinggong_guanxing_shift_advance_seconds
         )
         self._guanxing_watch_events = self._parse_watch_events(
             config.xinggong_guanxing_watch_events
@@ -321,6 +322,21 @@ class AutoXinggongPlugin:
     def _guanxing_window_start(self, settlement_at: datetime) -> datetime:
         return settlement_at - timedelta(hours=3)
 
+    def _guanxing_shift_at(self, settlement_at: datetime | None = None) -> datetime | None:
+        target = settlement_at or self._guanxing_settlement_at
+        if target is None:
+            return None
+        return target - timedelta(seconds=self._guanxing_shift_advance_seconds)
+
+    def _guanxing_claim_deadline(self, settlement_at: datetime | None = None) -> datetime | None:
+        target = settlement_at or self._guanxing_settlement_at
+        if target is None:
+            return None
+        shift_at = self._guanxing_shift_at(target)
+        if shift_at is None or shift_at <= target:
+            return target
+        return shift_at + timedelta(seconds=self._GUANXING_SHIFT_EXECUTION_GRACE_SECONDS)
+
     def _clear_guanxing_claim_state(self) -> None:
         self._guanxing_claim_active = False
         self._guanxing_claim_event = None
@@ -335,7 +351,8 @@ class AutoXinggongPlugin:
     def _expire_guanxing_claim_if_needed(self, now: datetime) -> None:
         if not self._guanxing_claim_active:
             return
-        if self._guanxing_settlement_at is not None and now >= self._guanxing_settlement_at:
+        deadline = self._guanxing_claim_deadline()
+        if deadline is not None and now >= deadline:
             self._clear_guanxing_claim_state()
             return
         if (
@@ -405,13 +422,16 @@ class AutoXinggongPlugin:
             return 0.0
         if self._is_critical_guanxing_send(plugin, text):
             return 0.0
-        shift_at = self._guanxing_settlement_at - timedelta(
-            seconds=self._guanxing_shift_advance_seconds
-        )
+        shift_at = self._guanxing_shift_at(self._guanxing_settlement_at)
+        if shift_at is None:
+            return 0.0
         block_start = shift_at - timedelta(seconds=self._global_send_min_interval_seconds)
         if current < block_start:
             return 0.0
-        return max(0.0, (self._guanxing_settlement_at - current).total_seconds())
+        deadline = self._guanxing_claim_deadline(self._guanxing_settlement_at)
+        if deadline is None:
+            return 0.0
+        return max(0.0, (deadline - current).total_seconds())
 
     def _sow_cmd(self) -> str:
         # In this group, the command auto-fills all empty disks; no disk index needed.
@@ -677,9 +697,9 @@ class AutoXinggongPlugin:
         ):
             return
         now = datetime.now()
-        shift_at = self._guanxing_settlement_at - timedelta(
-            seconds=self._guanxing_shift_advance_seconds
-        )
+        shift_at = self._guanxing_shift_at(self._guanxing_settlement_at)
+        if shift_at is None:
+            return
         if not self._guanxing_preview_sent and self._guanxing_own_command_msg_id is None:
             preview_at = self._guanxing_settlement_at - timedelta(
                 seconds=self._guanxing_preview_advance_seconds
@@ -729,7 +749,9 @@ class AutoXinggongPlugin:
         if self._guanxing_detected_settlement_at == settlement_at:
             return
 
-        shift_at = settlement_at - timedelta(seconds=self._guanxing_shift_advance_seconds)
+        shift_at = self._guanxing_shift_at(settlement_at)
+        if shift_at is None:
+            return
         if shift_at <= now or self._should_ignore_external_guanxing_preview(now):
             return
 
@@ -787,9 +809,16 @@ class AutoXinggongPlugin:
         self._expire_guanxing_claim_if_needed(now)
         if not self._guanxing_claim_active or self._guanxing_settlement_at is None:
             return
+        shift_at = self._guanxing_shift_at(self._guanxing_settlement_at)
+        if shift_at is None:
+            self._clear_guanxing_claim_state()
+            return
+        if now < shift_at:
+            await self._schedule_guanxing_shift(min(0.2, max(0.0, (shift_at - now).total_seconds())))
+            return
 
         if self._guanxing_own_preview_msg_id is None:
-            remaining = (self._guanxing_settlement_at - now).total_seconds()
+            remaining = (shift_at - now).total_seconds()
             if remaining > 0.2:
                 await self._schedule_guanxing_shift(min(0.2, remaining))
             else:

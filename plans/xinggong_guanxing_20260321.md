@@ -99,3 +99,43 @@
 ### 本轮验证
 - `./venv/bin/python -m unittest tests.test_xinggong` → 32/32 通过
 - `./venv/bin/python -m unittest discover` → 90/90 通过
+
+## 2026-03-26 改换提前量小数秒支持
+
+### 新需求
+- `改换星移` 提前量需要支持更晚发送。
+- 用户确认：改为支持小数秒，例如 `0.2` / `0.5`。
+- 约束：不加额外上限，但必须是数字且不能小于 `0`。
+
+### 本轮改动
+- [x] 将 `xinggong_guanxing_shift_advance_seconds` 从整数配置改为浮点配置
+- [x] 保持插件调度链路按浮点秒计算，不再强制最小值为 `1`
+- [x] 网页表单为该字段放开小数输入（`step=any`）
+- [x] 增加配置解析与插件调度测试
+- [x] 跑回归测试
+
+### 本轮验证
+- `./venv/bin/python -m unittest tests.test_config tests.test_xinggong` → 36/36 通过
+- `./venv/bin/python -m unittest discover` → 94/94 通过
+
+## 2026-03-26 改换偏移负数支持
+
+### 需求修正
+- 用户追加确认：`改换星移` 偏移秒数不仅要支持小数，还要支持负数。
+- 语义统一为：
+  - 正数 = 提前发送
+  - `0` = 结算点附近发送
+  - 负数 = 延后发送
+- 不再对取值范围做人为上限限制，由用户自行控制。
+
+### 本轮改动
+- [x] 放开配置层对负数值的限制
+- [x] 网页表单文案改为“正数提前，负数延后”
+- [x] 修正 `xinggong` claim 生命周期，避免结算一到就提前清掉负数偏移场景
+- [x] 修正阻塞窗口与延迟发送逻辑，兼容结算后短暂延后发送
+- [x] 增加负数偏移相关测试
+- [x] 跑完整回归测试
+
+### 本轮验证
+- `./venv/bin/python -m unittest tests.test_config tests.test_xinggong` → 40/40 通过
+- `./venv/bin/python -m unittest discover` → 98/98 通过
