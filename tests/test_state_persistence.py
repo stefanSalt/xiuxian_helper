@@ -185,6 +185,25 @@ class TestStateStoreAndRestore(unittest.IsolatedAsyncioTestCase):
             self.assertLess(delays["yuanying.chuqiao.loop"], 1210)
             store.close()
 
+    def test_yuanying_restore_state_keeps_escape_pause(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "state.sqlite3"
+            store = SQLiteStateStore(str(path))
+            store.save_state(
+                "yuanying",
+                {
+                    "escape_pause_active": True,
+                    "escape_pause_reason": "元婴遁逃暂停中，等待手动恢复",
+                },
+            )
+
+            plugin = AutoYuanyingPlugin(_dummy_config(enable_yuanying=True), logging.getLogger("test"))
+            plugin.set_state_store(store)
+            plugin.restore_state()
+
+            self.assertEqual(plugin.runtime_pause_reason(), "元婴遁逃暂停中，等待手动恢复")
+            store.close()
+
     async def test_xinggong_bootstrap_restores_poll_wenan_and_claim_windows(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "state.sqlite3"

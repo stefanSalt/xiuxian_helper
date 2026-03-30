@@ -142,6 +142,7 @@ class AccountRunner:
         self._state = "stopped"
         self._message = ""
         self._stop_requested = False
+        self._clear_runtime_pause_on_start = False
 
     @property
     def log_path(self) -> Path:
@@ -162,6 +163,9 @@ class AccountRunner:
         self._state = "starting"
         self._message = ""
         self._task = asyncio.create_task(self._run(), name=f"account-runner-{self.record.id}")
+
+    def set_manual_resume(self, enabled: bool) -> None:
+        self._clear_runtime_pause_on_start = bool(enabled)
 
     async def stop(self) -> None:
         self._stop_requested = True
@@ -221,6 +225,25 @@ class AccountRunner:
             (plugin for plugin in plugins if getattr(plugin, "name", "") == "xinggong"),
             None,
         )
+        yuanying = next(
+            (plugin for plugin in plugins if getattr(plugin, "name", "") == "yuanying"),
+            None,
+        )
+        if self._clear_runtime_pause_on_start and yuanying is not None:
+            clear_runtime_pause = getattr(yuanying, "clear_runtime_pause", None)
+            if callable(clear_runtime_pause):
+                clear_runtime_pause(clear_progress=True)
+
+        def _current_pause_message() -> str | None:
+            if yuanying is None or not getattr(yuanying, "enabled", False):
+                return None
+            pause_reason = getattr(yuanying, "runtime_pause_reason", None)
+            if not callable(pause_reason):
+                return None
+            result = pause_reason()
+            return result if isinstance(result, str) and result else None
+
+        pause_mode_active = False
 
         def _remember_sent(mid: int | None) -> None:
             if mid is None or mid in recent_sent_set:
@@ -231,6 +254,16 @@ class AccountRunner:
             recent_sent_ids.append(mid)
             recent_sent_set.add(mid)
 
+        async def _enter_pause_mode(reason: str) -> None:
+            nonlocal pause_mode_active
+            if pause_mode_active and self._state == "paused" and self._message == reason:
+                return
+            pause_mode_active = True
+            self._state = "paused"
+            self._message = reason
+            self._logger.warning("account_paused reason=%s", reason)
+            await scheduler.cancel_all()
+
         async def _send(
             plugin: str,
             text: str,
@@ -238,6 +271,15 @@ class AccountRunner:
             *,
             reply_to_msg_id: int | None = None,
         ) -> int | None:
+            pause_message = _current_pause_message()
+            if pause_message is not None:
+                await _enter_pause_mode(pause_message)
+                self._logger.warning(
+                    "send_suppressed_for_pause plugin=%s text=%s",
+                    plugin,
+                    text,
+                )
+                return None
             while xinggong is not None and getattr(xinggong, "enabled", False):
                 wait_seconds = xinggong.send_block_delay_seconds(plugin, text)
                 if wait_seconds <= 0:
@@ -259,6 +301,16 @@ class AccountRunner:
             return mid
 
         async def _execute_action(action) -> None:
+            pause_message = _current_pause_message()
+            if pause_message is not None:
+                await _enter_pause_mode(pause_message)
+                self._logger.warning(
+                    "action_suppressed_for_pause plugin=%s text=%s delay_seconds=%.1f",
+                    action.plugin,
+                    action.text,
+                    action.delay_seconds,
+                )
+                return
             if action.delay_seconds and action.delay_seconds > 0:
                 key = action.key or f"{action.plugin}:{action.text}"
 
@@ -293,6 +345,10 @@ class AccountRunner:
                     self._logger.info("<< %s", _short_text(ctx.text))
 
             actions = await dispatcher.dispatch(ctx)
+            pause_message = _current_pause_message()
+            if pause_message is not None:
+                await _enter_pause_mode(pause_message)
+                return
             for action in actions:
                 await _execute_action(action)
 
@@ -300,13 +356,17 @@ class AccountRunner:
             adapter.on_new_message(_on_event)
             adapter.on_message_edited(_on_event)
             await adapter.start()
-            for plugin in plugins:
-                if getattr(plugin, "enabled", False):
-                    bootstrap = getattr(plugin, "bootstrap", None)
-                    if callable(bootstrap):
-                        await bootstrap(scheduler, _send)
-            self._state = "running"
-            self._message = ""
+            pause_message = _current_pause_message()
+            if pause_message is not None:
+                await _enter_pause_mode(pause_message)
+            else:
+                for plugin in plugins:
+                    if getattr(plugin, "enabled", False):
+                        bootstrap = getattr(plugin, "bootstrap", None)
+                        if callable(bootstrap):
+                            await bootstrap(scheduler, _send)
+                self._state = "running"
+                self._message = ""
             await adapter.run_forever()
             if not self._stop_requested:
                 self._state = "stopped"
@@ -342,7 +402,13 @@ class RunnerManager:
         for runner in runners:
             await runner.stop()
 
-    async def start_account(self, account_id: int, *, respect_enabled: bool = False) -> None:
+    async def start_account(
+        self,
+        account_id: int,
+        *,
+        respect_enabled: bool = False,
+        clear_runtime_pause: bool = False,
+    ) -> None:
         record = self._repository.get_account(account_id)
         if record is None:
             return
@@ -353,6 +419,9 @@ class RunnerManager:
             if existing is not None:
                 await existing.stop()
             runner = AccountRunner(record, self._system_config)
+            set_manual_resume = getattr(runner, "set_manual_resume", None)
+            if callable(set_manual_resume):
+                set_manual_resume(clear_runtime_pause)
             self._runners[account_id] = runner
             await runner.start()
 
@@ -370,7 +439,7 @@ class RunnerManager:
         if not record.enabled:
             await self.stop_account(account_id)
             return
-        await self.start_account(account_id, respect_enabled=False)
+        await self.start_account(account_id, respect_enabled=False, clear_runtime_pause=False)
 
     def snapshots(self) -> dict[int, RunnerSnapshot]:
         return {account_id: runner.snapshot() for account_id, runner in self._runners.items()}

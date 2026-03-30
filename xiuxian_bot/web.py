@@ -473,7 +473,11 @@ def create_app() -> FastAPI:
         if not _is_authenticated(request, system_config):
             return _redirect_login()
         manager: RunnerManager = request.app.state.runner_manager
-        await manager.start_account(account_id, respect_enabled=False)
+        await manager.start_account(
+            account_id,
+            respect_enabled=False,
+            clear_runtime_pause=True,
+        )
         return RedirectResponse("/", status_code=303)
 
     @app.post("/accounts/{account_id}/stop")

@@ -270,6 +270,22 @@ class TestYuanyingPlugin(unittest.IsolatedAsyncioTestCase):
         delta = (blocked_until - start).total_seconds()
         self.assertGreater(delta, 6 * 3600)
         self.assertLess(delta, 6 * 3600 + 15)
+        self.assertEqual(plugin.runtime_pause_reason(), "元婴遁逃暂停中，等待手动恢复")
+
+    def test_clear_runtime_pause_can_reset_pending_progress(self) -> None:
+        plugin = AutoYuanyingPlugin(_dummy_config(), logging.getLogger("test"))
+        plugin._escape_pause_active = True  # type: ignore[attr-defined]
+        plugin._escape_pause_reason = "元婴遁逃暂停中，等待手动恢复"  # type: ignore[attr-defined]
+        plugin._liefeng_blocked_until = datetime.now() + timedelta(hours=6)  # type: ignore[attr-defined]
+        plugin._chuqiao_blocked_until = datetime.now() + timedelta(hours=2)  # type: ignore[attr-defined]
+        plugin._chuqiao_waiting_settle = True  # type: ignore[attr-defined]
+
+        plugin.clear_runtime_pause(clear_progress=True)
+
+        self.assertIsNone(plugin.runtime_pause_reason())
+        self.assertIsNone(getattr(plugin, "_liefeng_blocked_until"))
+        self.assertIsNone(getattr(plugin, "_chuqiao_blocked_until"))
+        self.assertFalse(getattr(plugin, "_chuqiao_waiting_settle"))
 
     async def test_chuqiao_busy_reply_requests_status_without_resetting_wait_time(self) -> None:
         plugin = AutoYuanyingPlugin(_dummy_config(), logging.getLogger("test"))

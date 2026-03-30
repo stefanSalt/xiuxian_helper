@@ -27,6 +27,7 @@ class AutoYuanyingPlugin:
     _RETRY_DELAY_SECONDS = 5
     _STATUS_RETRY_SECONDS = 120
     _SUMMARY_RECHECK_SECONDS = 15
+    _ESCAPE_PAUSE_REASON = "元婴遁逃暂停中，等待手动恢复"
 
     def __init__(self, config: Config, logger: logging.Logger) -> None:
         self._config = config
@@ -39,6 +40,8 @@ class AutoYuanyingPlugin:
         self._liefeng_blocked_until: datetime | None = None
         self._chuqiao_blocked_until: datetime | None = None
         self._chuqiao_waiting_settle = False
+        self._escape_pause_active = False
+        self._escape_pause_reason: str | None = None
         self._liefeng_interval_seconds = max(60, int(config.yuanying_liefeng_interval_seconds))
         self._chuqiao_interval_seconds = max(60, int(config.yuanying_chuqiao_interval_seconds))
 
@@ -59,6 +62,9 @@ class AutoYuanyingPlugin:
         self._liefeng_blocked_until = deserialize_datetime(state.get("liefeng_blocked_until"))
         self._chuqiao_blocked_until = deserialize_datetime(state.get("chuqiao_blocked_until"))
         self._chuqiao_waiting_settle = bool(state.get("chuqiao_waiting_settle", False))
+        self._escape_pause_active = bool(state.get("escape_pause_active", False))
+        reason = state.get("escape_pause_reason")
+        self._escape_pause_reason = reason if isinstance(reason, str) and reason else None
 
     def _save_state(self) -> None:
         if self._state_store is None:
@@ -69,8 +75,30 @@ class AutoYuanyingPlugin:
                 "liefeng_blocked_until": serialize_datetime(self._liefeng_blocked_until),
                 "chuqiao_blocked_until": serialize_datetime(self._chuqiao_blocked_until),
                 "chuqiao_waiting_settle": self._chuqiao_waiting_settle,
+                "escape_pause_active": self._escape_pause_active,
+                "escape_pause_reason": self._escape_pause_reason,
             },
         )
+
+    def runtime_pause_reason(self) -> str | None:
+        if not self.enabled or not self._escape_pause_active:
+            return None
+        return self._escape_pause_reason or self._ESCAPE_PAUSE_REASON
+
+    def clear_runtime_pause(self, *, clear_progress: bool = False) -> None:
+        self._escape_pause_active = False
+        self._escape_pause_reason = None
+        if clear_progress:
+            self._liefeng_blocked_until = None
+            self._chuqiao_blocked_until = None
+            self._chuqiao_waiting_settle = False
+        self._save_state()
+
+    def _activate_escape_pause(self) -> None:
+        self._escape_pause_active = True
+        self._escape_pause_reason = self._ESCAPE_PAUSE_REASON
+        self._save_state()
+        self._logger.warning("yuanying_escape_pause_activated reason=%s", self._escape_pause_reason)
 
     def _is_mine(self, ctx: MessageContext, text: str) -> bool:
         return bool(ctx.is_reply_to_me or (self._config.my_name and self._config.my_name in text))
@@ -207,6 +235,7 @@ class AutoYuanyingPlugin:
             if remaining is None:
                 return None
             await self._set_liefeng_next(float(remaining + self._BUFFER_SECONDS))
+            self._activate_escape_pause()
             return None
 
         if "遭遇风暴" in text or "不敌败退" in text:

@@ -39,7 +39,7 @@
               <button type="submit" class="btn btn-light">{{ '禁用' if account.enabled else '启用' }}</button>
             </form>
             <form method="post" action="/accounts/{{ account.id }}/start">
-              <button type="submit" class="btn btn-light">启动</button>
+              <button type="submit" class="btn btn-light">{{ '恢复' if snapshot and snapshot.state == 'paused' else '启动' }}</button>
             </form>
             <form method="post" action="/accounts/{{ account.id }}/stop">
               <button type="submit" class="btn btn-light">停止</button>
