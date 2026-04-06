@@ -28,16 +28,21 @@ class AutoYuanyingPlugin:
     _STATUS_RETRY_SECONDS = 120
     _SUMMARY_RECHECK_SECONDS = 15
     _ESCAPE_PAUSE_REASON = "元婴遁逃暂停中，等待手动恢复"
+    _LIEFENG_SOURCE_INTERVAL = "interval"
+    _LIEFENG_SOURCE_COOLDOWN = "cooldown"
+    _LIEFENG_SOURCE_WEAKNESS = "weakness"
 
     def __init__(self, config: Config, logger: logging.Logger) -> None:
         self._config = config
         self._logger = logger
         self.enabled = bool(config.enable_yuanying)
+        self._liefeng_enabled = bool(config.enable_yuanying_liefeng)
 
         self._scheduler: Scheduler | None = None
         self._send: SendFn | None = None
         self._state_store: SQLiteStateStore | None = None
         self._liefeng_blocked_until: datetime | None = None
+        self._liefeng_block_source: str | None = None
         self._chuqiao_blocked_until: datetime | None = None
         self._chuqiao_waiting_settle = False
         self._escape_pause_active = False
@@ -47,7 +52,8 @@ class AutoYuanyingPlugin:
 
         if self.enabled:
             self._logger.info(
-                "yuanying_plugin_enabled liefeng_interval_seconds=%s chuqiao_interval_seconds=%s",
+                "yuanying_plugin_enabled liefeng_enabled=%s liefeng_interval_seconds=%s chuqiao_interval_seconds=%s",
+                self._liefeng_enabled,
                 self._liefeng_interval_seconds,
                 self._chuqiao_interval_seconds,
             )
@@ -60,6 +66,8 @@ class AutoYuanyingPlugin:
             return
         state = self._state_store.load_state(self.name)
         self._liefeng_blocked_until = deserialize_datetime(state.get("liefeng_blocked_until"))
+        source = state.get("liefeng_block_source")
+        self._liefeng_block_source = source if isinstance(source, str) and source else None
         self._chuqiao_blocked_until = deserialize_datetime(state.get("chuqiao_blocked_until"))
         self._chuqiao_waiting_settle = bool(state.get("chuqiao_waiting_settle", False))
         self._escape_pause_active = bool(state.get("escape_pause_active", False))
@@ -73,6 +81,7 @@ class AutoYuanyingPlugin:
             self.name,
             {
                 "liefeng_blocked_until": serialize_datetime(self._liefeng_blocked_until),
+                "liefeng_block_source": self._liefeng_block_source,
                 "chuqiao_blocked_until": serialize_datetime(self._chuqiao_blocked_until),
                 "chuqiao_waiting_settle": self._chuqiao_waiting_settle,
                 "escape_pause_active": self._escape_pause_active,
@@ -90,6 +99,7 @@ class AutoYuanyingPlugin:
         self._escape_pause_reason = None
         if clear_progress:
             self._liefeng_blocked_until = None
+            self._liefeng_block_source = None
             self._chuqiao_blocked_until = None
             self._chuqiao_waiting_settle = False
         self._save_state()
@@ -142,7 +152,8 @@ class AutoYuanyingPlugin:
             return
         self._scheduler = scheduler
         self._send = send
-        await self._schedule_liefeng_loop(self._initial_liefeng_delay_seconds())
+        if self._liefeng_enabled:
+            await self._schedule_liefeng_loop(self._initial_liefeng_delay_seconds())
         await self._schedule_chuqiao_loop(0.0)
 
     async def _schedule_liefeng_loop(self, delay_seconds: float) -> None:
@@ -172,7 +183,7 @@ class AutoYuanyingPlugin:
         )
 
     async def _liefeng_loop(self) -> None:
-        if not self.enabled or self._send is None:
+        if not self.enabled or not self._liefeng_enabled or self._send is None:
             return
 
         now = datetime.now()
@@ -181,7 +192,10 @@ class AutoYuanyingPlugin:
             return
 
         await self._send(self.name, self._CMD_LIEFENG, True)
-        await self._schedule_liefeng_loop(float(self._liefeng_interval_seconds))
+        await self._set_liefeng_next(
+            float(self._liefeng_interval_seconds),
+            source=self._LIEFENG_SOURCE_INTERVAL,
+        )
 
     async def _chuqiao_loop(self) -> None:
         if not self.enabled or self._send is None:
@@ -202,10 +216,12 @@ class AutoYuanyingPlugin:
         await self._send(self.name, self._CMD_CHUQIAO_STATUS, True)
         await self._schedule_chuqiao_loop(float(self._STATUS_RETRY_SECONDS))
 
-    async def _set_liefeng_next(self, delay_seconds: float) -> None:
+    async def _set_liefeng_next(self, delay_seconds: float, *, source: str | None) -> None:
         self._liefeng_blocked_until = datetime.now() + timedelta(seconds=delay_seconds)
+        self._liefeng_block_source = source
         self._save_state()
-        await self._schedule_liefeng_loop(delay_seconds)
+        if self._liefeng_enabled:
+            await self._schedule_liefeng_loop(delay_seconds)
 
     async def _set_chuqiao_next(self, delay_seconds: float) -> None:
         self._chuqiao_blocked_until = datetime.now() + timedelta(seconds=delay_seconds)
@@ -223,22 +239,33 @@ class AutoYuanyingPlugin:
             remaining = self._parse_duration_seconds(text)
             if remaining is None:
                 return None
-            await self._set_liefeng_next(float(remaining + self._BUFFER_SECONDS))
+            await self._set_liefeng_next(
+                float(remaining + self._BUFFER_SECONDS),
+                source=self._LIEFENG_SOURCE_COOLDOWN,
+            )
             return None
 
         if "探寻成功" in text:
-            await self._set_liefeng_next(float(self._liefeng_interval_seconds))
+            await self._set_liefeng_next(
+                float(self._liefeng_interval_seconds),
+                source=self._LIEFENG_SOURCE_INTERVAL,
+            )
             return None
 
         if "元婴遁逃" in text and "虚弱期" in text:
             remaining = self._parse_duration_seconds(text)
             if remaining is None:
                 return None
-            await self._set_liefeng_next(float(remaining + self._BUFFER_SECONDS))
+            await self._set_liefeng_next(
+                float(remaining + self._BUFFER_SECONDS),
+                source=self._LIEFENG_SOURCE_WEAKNESS,
+            )
             self._activate_escape_pause()
             return None
 
         if "遭遇风暴" in text or "不敌败退" in text:
+            if not self._liefeng_enabled:
+                return None
             return [
                 SendAction(
                     plugin=self.name,

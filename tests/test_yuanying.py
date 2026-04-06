@@ -10,6 +10,7 @@ from xiuxian_bot.plugins.yuanying import AutoYuanyingPlugin
 def _dummy_config(
     *,
     enable_yuanying: bool = True,
+    enable_yuanying_liefeng: bool = True,
     yuanying_liefeng_interval_seconds: int = 43200,
     yuanying_chuqiao_interval_seconds: int = 28800,
 ) -> Config:
@@ -56,6 +57,7 @@ def _dummy_config(
         zongmen_chuangong_xinde_text="宗门传功",
         zongmen_catch_up=True,
         zongmen_action_spacing_seconds=20,
+        enable_yuanying_liefeng=enable_yuanying_liefeng,
     )
 
 
@@ -73,6 +75,24 @@ class TestYuanyingPlugin(unittest.IsolatedAsyncioTestCase):
 
         await plugin.bootstrap(_FakeScheduler(), _send)
         self.assertIn(("yuanying.liefeng.loop", 43200.0), calls)
+        self.assertIn(("yuanying.chuqiao.loop", 0.0), calls)
+
+    async def test_disable_liefeng_only_schedules_chuqiao_loop(self) -> None:
+        plugin = AutoYuanyingPlugin(
+            _dummy_config(enable_yuanying=True, enable_yuanying_liefeng=False),
+            logging.getLogger("test"),
+        )
+        calls: list[tuple[str, float]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                calls.append((key, delay_seconds))
+
+        async def _send(_plugin: str, _text: str, _reply_to_topic: bool) -> int | None:
+            return None
+
+        await plugin.bootstrap(_FakeScheduler(), _send)
+        self.assertNotIn(("yuanying.liefeng.loop", 43200.0), calls)
         self.assertIn(("yuanying.chuqiao.loop", 0.0), calls)
 
     async def test_loops_use_expected_intervals(self) -> None:
@@ -139,6 +159,24 @@ class TestYuanyingPlugin(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0].text, ".探寻裂缝")
         self.assertEqual(actions[0].delay_seconds, 5.0)
+
+    async def test_liefeng_failure_does_not_retry_when_disabled(self) -> None:
+        plugin = AutoYuanyingPlugin(
+            _dummy_config(enable_yuanying=True, enable_yuanying_liefeng=False),
+            logging.getLogger("test"),
+        )
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=21,
+            reply_to_msg_id=11,
+            sender_id=999,
+            text="【遭遇风暴】空间裂缝中风暴肆虐，你的元婴受创，被迫逃回！",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=True,
+        )
+        actions = await plugin.on_message(ctx)
+        self.assertIsNone(actions)
 
     async def test_chuqiao_reply_syncs_next_run(self) -> None:
         plugin = AutoYuanyingPlugin(_dummy_config(), logging.getLogger("test"))

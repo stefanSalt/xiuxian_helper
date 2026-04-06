@@ -218,6 +218,7 @@ class Config:
     enable_xinggong_wenan: bool = True
     enable_xinggong_deep_biguan: bool = False
     enable_xinggong_guanxing: bool = False
+    enable_yuanying_liefeng: bool = True
     xinggong_guanxing_target_username: str = "salt9527"
     xinggong_guanxing_preview_advance_seconds: int = 180
     xinggong_guanxing_shift_advance_seconds: float = 1.0
@@ -371,6 +372,10 @@ class Config:
                 data.get("enable_xinggong_guanxing", False),
                 "enable_xinggong_guanxing",
             ),
+            enable_yuanying_liefeng=_parse_bool(
+                data.get("enable_yuanying_liefeng", True),
+                "enable_yuanying_liefeng",
+            ),
             xinggong_guanxing_target_username=str(
                 data.get("xinggong_guanxing_target_username", "salt9527")
             ).strip()
@@ -496,6 +501,9 @@ class Config:
             ),
             "enable_xinggong_guanxing": _get_env_bool(
                 "ENABLE_XINGGONG_GUANXING", default=False
+            ),
+            "enable_yuanying_liefeng": _get_env_bool(
+                "ENABLE_YUANYING_LIEFENG", default=True
             ),
             "xinggong_guanxing_target_username": _get_env_str(
                 "XINGGONG_GUANXING_TARGET_USERNAME",

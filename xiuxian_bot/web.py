@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 
 from .config import Config, SystemConfig
 from .core.account_repository import AccountRepository
+from .core.state_store import SQLiteStateStore
 from .runtime import RunnerManager, setup_root_logger
 
 
@@ -34,6 +35,7 @@ CHECKBOX_FIELDS = {
     "enable_xinggong_wenan",
     "enable_xinggong_deep_biguan",
     "enable_xinggong_guanxing",
+    "enable_yuanying_liefeng",
     "enable_chuangta",
 }
 
@@ -120,6 +122,7 @@ FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
     (
         "元婴 / 闯塔 / 宗门",
         [
+            {"name": "enable_yuanying_liefeng", "label": "自动探寻裂缝", "type": "checkbox"},
             {"name": "yuanying_liefeng_interval_seconds", "label": "探寻裂缝间隔(秒)", "type": "number"},
             {"name": "yuanying_chuqiao_interval_seconds", "label": "元婴出窍间隔(秒)", "type": "number"},
             {"name": "chuangta_time", "label": "闯塔时间", "type": "text"},
@@ -175,6 +178,7 @@ def _template_values_for_new(system_config: SystemConfig) -> dict[str, Any]:
         "xinggong_wenan_interval_seconds": 43200,
         "enable_xinggong_deep_biguan": False,
         "enable_xinggong_guanxing": False,
+        "enable_yuanying_liefeng": True,
         "xinggong_guanxing_target_username": "salt9527",
         "xinggong_guanxing_preview_advance_seconds": 180,
         "xinggong_guanxing_shift_advance_seconds": 1.0,
@@ -219,6 +223,68 @@ def _build_config_from_form(form, system_config: SystemConfig) -> tuple[str, boo
     raw["account_id"] = ""
     config = Config.from_mapping(raw)
     return name, enabled, config
+
+
+def _drop_state_keys(state_store: SQLiteStateStore, plugin: str, keys: set[str]) -> bool:
+    state = state_store.load_state(plugin)
+    if not state:
+        return False
+    changed = False
+    for key in keys:
+        if key in state:
+            state.pop(key, None)
+            changed = True
+    if changed:
+        state_store.save_state(plugin, state)
+    return changed
+
+
+def _reconcile_runtime_state_for_config_change(
+    *,
+    db_path: str,
+    account_id: int,
+    previous_config: Config,
+    current_config: Config,
+    logger: logging.Logger | None,
+) -> None:
+    state_store = SQLiteStateStore(db_path, logger, account_id=str(account_id))
+    try:
+        if (
+            previous_config.garden_poll_interval_seconds != current_config.garden_poll_interval_seconds
+            or previous_config.garden_action_spacing_seconds != current_config.garden_action_spacing_seconds
+        ):
+            _drop_state_keys(state_store, "garden", {"next_poll_at"})
+
+        if (
+            previous_config.xinggong_poll_interval_seconds != current_config.xinggong_poll_interval_seconds
+            or previous_config.xinggong_action_spacing_seconds != current_config.xinggong_action_spacing_seconds
+        ):
+            _drop_state_keys(state_store, "xinggong", {"next_poll_at"})
+
+        if (
+            previous_config.enable_xinggong_wenan != current_config.enable_xinggong_wenan
+            or previous_config.xinggong_wenan_interval_seconds
+            != current_config.xinggong_wenan_interval_seconds
+        ):
+            _drop_state_keys(state_store, "xinggong", {"wenan_next_at"})
+
+        if (
+            previous_config.yuanying_liefeng_interval_seconds
+            != current_config.yuanying_liefeng_interval_seconds
+            or previous_config.enable_yuanying_liefeng != current_config.enable_yuanying_liefeng
+        ):
+            state = state_store.load_state("yuanying")
+            if state:
+                source = state.get("liefeng_block_source")
+                escape_pause_active = bool(state.get("escape_pause_active", False))
+                if not escape_pause_active and source not in {"cooldown", "weakness"}:
+                    _drop_state_keys(
+                        state_store,
+                        "yuanying",
+                        {"liefeng_blocked_until", "liefeng_block_source"},
+                    )
+    finally:
+        state_store.close()
 
 
 def _auth_token(system_config: SystemConfig) -> str:
@@ -423,6 +489,7 @@ def create_app() -> FastAPI:
         system_config: SystemConfig = request.app.state.system_config
         if not _is_authenticated(request, system_config):
             return _redirect_login()
+        logger: logging.Logger = request.app.state.logger
         repository: AccountRepository = request.app.state.repository
         manager: RunnerManager = request.app.state.runner_manager
         form = await request.form()
@@ -430,8 +497,18 @@ def create_app() -> FastAPI:
         for key in CHECKBOX_FIELDS | {"enabled"}:
             values[key] = key in form
         try:
+            previous_record = repository.get_account(account_id)
+            if previous_record is None:
+                return RedirectResponse("/", status_code=303)
             name, enabled, config = _build_config_from_form(form, system_config)
             repository.update_account(account_id, name, config, enabled=enabled)
+            _reconcile_runtime_state_for_config_change(
+                db_path=system_config.app_db_path,
+                account_id=account_id,
+                previous_config=previous_record.config,
+                current_config=config,
+                logger=logger,
+            )
             await manager.sync_account(account_id)
             return RedirectResponse("/", status_code=303)
         except Exception as exc:

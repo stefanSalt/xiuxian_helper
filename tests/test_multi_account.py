@@ -10,7 +10,7 @@ from unittest.mock import patch
 from xiuxian_bot.config import Config, SystemConfig
 from xiuxian_bot.core.account_repository import AccountRepository
 from xiuxian_bot.core.contracts import MessageContext, SendAction
-from xiuxian_bot.core.state_store import SQLiteStateStore
+from xiuxian_bot.core.state_store import SQLiteStateStore, serialize_datetime
 
 
 def _dummy_config(**overrides) -> Config:
@@ -64,6 +64,7 @@ def _dummy_config(**overrides) -> Config:
         xinggong_guanxing_preview_advance_seconds=180,
         xinggong_guanxing_shift_advance_seconds=1,
         xinggong_guanxing_watch_events="星辰异象,地磁暴动",
+        enable_yuanying_liefeng=True,
         global_send_min_interval_seconds=10,
         state_db_path="xiuxian_app.sqlite3",
         enable_chuangta=False,
@@ -136,6 +137,118 @@ class TestMultiAccountStorage(unittest.TestCase):
             self.assertEqual(store.load_state("xinggong"), {})
             store.close()
             repo.close()
+
+    def test_reconcile_config_change_clears_scheduled_state(self) -> None:
+        from xiuxian_bot.web import _reconcile_runtime_state_for_config_change
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "app.sqlite3"
+            logger = logging.getLogger("test")
+            garden_next = serialize_datetime(datetime.now())
+            xinggong_next = serialize_datetime(datetime.now())
+            wenan_next = serialize_datetime(datetime.now())
+            qizhen_blocked = serialize_datetime(datetime.now())
+            chuqiao_blocked = serialize_datetime(datetime.now())
+            store = SQLiteStateStore(str(path), logger, account_id="1")
+            store.save_state(
+                "garden",
+                {
+                    "seed_insufficient": True,
+                    "next_poll_at": garden_next,
+                },
+            )
+            store.save_state(
+                "xinggong",
+                {
+                    "next_poll_at": xinggong_next,
+                    "wenan_next_at": wenan_next,
+                    "qizhen_blocked_until": qizhen_blocked,
+                },
+            )
+            store.save_state(
+                "yuanying",
+                {
+                    "liefeng_blocked_until": serialize_datetime(datetime.now()),
+                    "chuqiao_blocked_until": chuqiao_blocked,
+                },
+            )
+            store.close()
+
+            previous = _dummy_config(
+                enable_garden=True,
+                enable_xinggong=True,
+                enable_yuanying=True,
+                garden_poll_interval_seconds=3600,
+                xinggong_poll_interval_seconds=3600,
+                xinggong_wenan_interval_seconds=43200,
+                yuanying_liefeng_interval_seconds=43200,
+            )
+            current = _dummy_config(
+                enable_garden=True,
+                enable_xinggong=True,
+                enable_yuanying=True,
+                garden_poll_interval_seconds=600,
+                xinggong_poll_interval_seconds=600,
+                xinggong_wenan_interval_seconds=3600,
+                yuanying_liefeng_interval_seconds=1800,
+            )
+
+            _reconcile_runtime_state_for_config_change(
+                db_path=str(path),
+                account_id=1,
+                previous_config=previous,
+                current_config=current,
+                logger=logger,
+            )
+
+            store = SQLiteStateStore(str(path), logger, account_id="1")
+            self.assertEqual(store.load_state("garden"), {"seed_insufficient": True})
+            self.assertEqual(
+                store.load_state("xinggong"),
+                {"qizhen_blocked_until": qizhen_blocked},
+            )
+            yuanying_state = store.load_state("yuanying")
+            self.assertNotIn("liefeng_blocked_until", yuanying_state)
+            self.assertEqual(yuanying_state["chuqiao_blocked_until"], chuqiao_blocked)
+            store.close()
+
+    def test_reconcile_config_change_preserves_yuanying_real_cooldown(self) -> None:
+        from xiuxian_bot.web import _reconcile_runtime_state_for_config_change
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "app.sqlite3"
+            logger = logging.getLogger("test")
+            store = SQLiteStateStore(str(path), logger, account_id="1")
+            blocked_until = serialize_datetime(datetime.now())
+            store.save_state(
+                "yuanying",
+                {
+                    "liefeng_blocked_until": blocked_until,
+                    "liefeng_block_source": "cooldown",
+                },
+            )
+            store.close()
+
+            previous = _dummy_config(enable_yuanying=True, yuanying_liefeng_interval_seconds=43200)
+            current = _dummy_config(enable_yuanying=True, yuanying_liefeng_interval_seconds=1800)
+
+            _reconcile_runtime_state_for_config_change(
+                db_path=str(path),
+                account_id=1,
+                previous_config=previous,
+                current_config=current,
+                logger=logger,
+            )
+
+            store = SQLiteStateStore(str(path), logger, account_id="1")
+            self.assertEqual(
+                store.load_state("yuanying"),
+                {
+                    "liefeng_blocked_until": blocked_until,
+                    "liefeng_block_source": "cooldown",
+                },
+            )
+            store.close()
 
     def test_ensure_legacy_account_migrates_first_account_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
