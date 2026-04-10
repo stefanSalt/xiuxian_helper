@@ -44,6 +44,15 @@ def _short_text(text: str, max_chars: int = 160) -> str:
     return text[: max_chars - 1] + "…"
 
 
+def _reset_logger_handlers(logger: logging.Logger) -> None:
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        try:
+            handler.close()
+        except Exception:
+            pass
+
+
 def _resolve_session_name(system_config: SystemConfig, session_name: str) -> str:
     raw = (session_name or "").strip()
     if not raw:
@@ -115,7 +124,7 @@ def setup_root_logger(system_config: SystemConfig) -> logging.Logger:
     logger = logging.getLogger("xiuxian_root")
     logger.setLevel(getattr(logging, system_config.log_level, logging.INFO))
     logger.propagate = False
-    logger.handlers.clear()
+    _reset_logger_handlers(logger)
     handler = logging.StreamHandler()
     handler.setFormatter(logging.Formatter(fmt))
     logger.addHandler(handler)
@@ -133,7 +142,7 @@ def build_account_logger(system_config: SystemConfig, account: AccountRecord) ->
     numeric_level = getattr(logging, account.config.log_level or system_config.log_level, logging.INFO)
     logger.setLevel(numeric_level)
     logger.propagate = False
-    logger.handlers.clear()
+    _reset_logger_handlers(logger)
 
     fmt = f"%(asctime)s %(levelname)s [account:{account.name}#{account.id}] %(message)s"
     formatter = logging.Formatter(fmt)

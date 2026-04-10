@@ -282,6 +282,28 @@ class TestMultiAccountStorage(unittest.TestCase):
             self.assertEqual(resolved, str(Path(tmpdir) / "sessions" / "bot-1"))
             self.assertTrue((Path(tmpdir) / "sessions").exists())
 
+    def test_build_account_logger_closes_previous_file_handler(self) -> None:
+        from xiuxian_bot.runtime import build_account_logger
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "app.sqlite3"
+            repo = AccountRepository(str(path), logging.getLogger("test"))
+            record = repo.create_account("alpha", _dummy_config(account_name="alpha"), enabled=True)
+            system_config = SystemConfig(app_db_path=str(path), log_dir=str(Path(tmpdir) / "logs"))
+
+            logger, _ = build_account_logger(system_config, record)
+            first_file_handler = next(
+                handler for handler in logger.handlers if isinstance(handler, logging.FileHandler)
+            )
+
+            logger, _ = build_account_logger(system_config, record)
+            self.assertIsNone(first_file_handler.stream)
+
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+                handler.close()
+            repo.close()
+
 
 @unittest.skipUnless(HAS_RUNTIME_DEPS, "requires telethon runtime dependencies")
 class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
