@@ -13,6 +13,24 @@
     </div>
   </div>
 
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="muted">总条数：{{ stats.total_count }}</div>
+    </div>
+    <div class="stat-card">
+      <div class="muted">今日新增：{{ stats.today_count }}</div>
+    </div>
+    <div class="stat-card">
+      <div class="muted">近7日新增：{{ stats.last_7_days_count }}</div>
+    </div>
+    <div class="stat-card">
+      <div class="muted">近30日新增：{{ stats.last_30_days_count }}</div>
+    </div>
+    <div class="stat-card">
+      <div class="muted">SQLite大小：{{ storage_size_label }}</div>
+    </div>
+  </div>
+
   <form method="get" class="grid grid-2 archive-filters">
     <label class="field">
       <span>关键词</span>

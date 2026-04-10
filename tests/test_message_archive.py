@@ -1,9 +1,10 @@
 import asyncio
 import importlib.util
 import logging
+import sqlite3
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -137,6 +138,81 @@ class TestMessageArchiveRepository(unittest.TestCase):
             self.assertEqual([row.edit_version for row in rows], [1, 0])
             self.assertEqual(repo.count_messages(query="已编辑", account_id=1), 1)
             self.assertEqual(repo.search_messages(query="已编辑", event_type="edit", account_id=1)[0].event_type, "edit")
+            repo.close()
+
+    def test_stats_summary_uses_scope_and_beijing_day_window(self) -> None:
+        from xiuxian_bot.core.message_archive_repository import (
+            MessageArchiveInput,
+            MessageArchiveRepository,
+        )
+
+        fixed_now = datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "app.sqlite3"
+            repo = MessageArchiveRepository(str(path), logging.getLogger("test"))
+            for account_id, message_id in (
+                (1, 1001),
+                (1, 1002),
+                (1, 1003),
+                (1, 1004),
+                (2, 2001),
+            ):
+                repo.archive_message(
+                    MessageArchiveInput(
+                        account_id=account_id,
+                        chat_id=-100,
+                        topic_id=900,
+                        message_id=message_id,
+                        reply_to_msg_id=900,
+                        sender_id=777,
+                        sender_name="tester",
+                        raw_text=f"msg-{message_id}",
+                        event_type="new",
+                        message_ts=fixed_now,
+                        is_reply=False,
+                        is_topic_message=True,
+                    )
+                )
+            repo.close()
+
+            conn = sqlite3.connect(str(path))
+            conn.execute(
+                "UPDATE message_archive SET captured_at = ? WHERE message_id = ?",
+                (fixed_now.isoformat(timespec="seconds"), 1001),
+            )
+            conn.execute(
+                "UPDATE message_archive SET captured_at = ? WHERE message_id = ?",
+                ((fixed_now - timedelta(days=3)).isoformat(timespec="seconds"), 1002),
+            )
+            conn.execute(
+                "UPDATE message_archive SET captured_at = ? WHERE message_id = ?",
+                ((fixed_now - timedelta(days=20)).isoformat(timespec="seconds"), 1003),
+            )
+            conn.execute(
+                "UPDATE message_archive SET captured_at = ? WHERE message_id = ?",
+                ((fixed_now - timedelta(days=40)).isoformat(timespec="seconds"), 1004),
+            )
+            conn.execute(
+                "UPDATE message_archive SET captured_at = ? WHERE message_id = ?",
+                ((fixed_now - timedelta(hours=1)).isoformat(timespec="seconds"), 2001),
+            )
+            conn.commit()
+            conn.close()
+
+            repo = MessageArchiveRepository(str(path), logging.getLogger("test"))
+            global_stats = repo.get_stats(now=fixed_now)
+            account_stats = repo.get_stats(account_id=1, now=fixed_now)
+
+            self.assertEqual(global_stats.total_count, 5)
+            self.assertEqual(global_stats.today_count, 2)
+            self.assertEqual(global_stats.last_7_days_count, 3)
+            self.assertEqual(global_stats.last_30_days_count, 4)
+
+            self.assertEqual(account_stats.total_count, 4)
+            self.assertEqual(account_stats.today_count, 1)
+            self.assertEqual(account_stats.last_7_days_count, 2)
+            self.assertEqual(account_stats.last_30_days_count, 3)
             repo.close()
 
 
@@ -372,6 +448,18 @@ class TestWebMessageArchive(unittest.IsolatedAsyncioTestCase):
                         )
                     )
                     archive.close()
+                    conn = sqlite3.connect(system_config.app_db_path)
+                    fixed_now = datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc)
+                    conn.execute(
+                        "UPDATE message_archive SET captured_at = ? WHERE message_id = ?",
+                        (fixed_now.isoformat(timespec="seconds"), 1),
+                    )
+                    conn.execute(
+                        "UPDATE message_archive SET captured_at = ? WHERE message_id = ?",
+                        ((fixed_now - timedelta(days=8)).isoformat(timespec="seconds"), 2),
+                    )
+                    conn.commit()
+                    conn.close()
                     repository.close()
 
                     transport = httpx.ASGITransport(app=app)
@@ -388,12 +476,18 @@ class TestWebMessageArchive(unittest.IsolatedAsyncioTestCase):
                         self.assertIn("消息归档", global_page.text)
                         self.assertIn("全局检索目标", global_page.text)
                         self.assertNotIn("其他消息", global_page.text)
+                        self.assertIn("总条数：2", global_page.text)
+                        self.assertIn("今日新增：1", global_page.text)
+                        self.assertIn("近7日新增：1", global_page.text)
+                        self.assertIn("近30日新增：2", global_page.text)
+                        self.assertIn("SQLite大小：", global_page.text)
 
                         account_page = await client.get(f"/accounts/{account.id}/messages?q=全局检索")
                         self.assertEqual(account_page.status_code, 200)
                         self.assertIn(f"账号消息 #{account.id}", account_page.text)
                         self.assertIn("全局检索目标", account_page.text)
                         self.assertNotIn("其他消息", account_page.text)
+                        self.assertIn("总条数：2", account_page.text)
 
 
 if __name__ == "__main__":

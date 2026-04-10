@@ -3,10 +3,13 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ..domain.text_normalizer import normalize_match_text
+
+
+_BEIJING_TZ = timezone(timedelta(hours=8))
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,14 @@ class MessageArchiveRecord:
     edit_version: int
     is_reply: bool
     is_topic_message: bool
+
+
+@dataclass(frozen=True)
+class MessageArchiveStats:
+    total_count: int
+    today_count: int
+    last_7_days_count: int
+    last_30_days_count: int
 
 
 class MessageArchiveRepository:
@@ -96,6 +107,10 @@ class MessageArchiveRepository:
             """
         )
         self._conn.commit()
+
+    @property
+    def path(self) -> Path:
+        return self._path
 
     def close(self) -> None:
         self._conn.close()
@@ -200,6 +215,53 @@ class MessageArchiveRepository:
         )
         row = self._conn.execute(sql, params).fetchone()
         return int(row["c"]) if row is not None else 0
+
+    def get_stats(
+        self,
+        *,
+        account_id: int | None = None,
+        now: datetime | None = None,
+    ) -> MessageArchiveStats:
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        else:
+            current = current.astimezone(timezone.utc)
+        current_local = current.astimezone(_BEIJING_TZ)
+        today_start_local = current_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        last_7_start_local = today_start_local - timedelta(days=6)
+        last_30_start_local = today_start_local - timedelta(days=29)
+
+        clauses = ["1 = 1"]
+        params: list[object] = [
+            last_30_start_local.astimezone(timezone.utc).isoformat(timespec="seconds"),
+            last_7_start_local.astimezone(timezone.utc).isoformat(timespec="seconds"),
+            today_start_local.astimezone(timezone.utc).isoformat(timespec="seconds"),
+        ]
+        if account_id is not None:
+            clauses.append("account_id = ?")
+            params.append(int(account_id))
+        where_sql = " AND ".join(clauses)
+        row = self._conn.execute(
+            f"""
+            SELECT
+                COUNT(*) AS total_count,
+                COALESCE(SUM(CASE WHEN captured_at >= ? THEN 1 ELSE 0 END), 0) AS last_30_days_count,
+                COALESCE(SUM(CASE WHEN captured_at >= ? THEN 1 ELSE 0 END), 0) AS last_7_days_count,
+                COALESCE(SUM(CASE WHEN captured_at >= ? THEN 1 ELSE 0 END), 0) AS today_count
+            FROM message_archive
+            WHERE {where_sql}
+            """,
+            params,
+        ).fetchone()
+        if row is None:
+            return MessageArchiveStats(0, 0, 0, 0)
+        return MessageArchiveStats(
+            total_count=int(row["total_count"]),
+            today_count=int(row["today_count"]),
+            last_7_days_count=int(row["last_7_days_count"]),
+            last_30_days_count=int(row["last_30_days_count"]),
+        )
 
     def _build_search_sql(
         self,

@@ -366,6 +366,27 @@ def _build_page_url(request: Request, page: int) -> str:
     return f"{request.url.path}?{encoded}" if encoded else request.url.path
 
 
+def _sqlite_storage_bytes(path: Path) -> int:
+    total = 0
+    for suffix in ("", "-wal", "-shm"):
+        candidate = Path(f"{path}{suffix}")
+        if candidate.exists():
+            total += candidate.stat().st_size
+    return total
+
+
+def _format_bytes(size: int) -> str:
+    value = float(max(size, 0))
+    units = ["B", "KB", "MB", "GB", "TB"]
+    unit_index = 0
+    while value >= 1024 and unit_index < len(units) - 1:
+        value /= 1024
+        unit_index += 1
+    if unit_index == 0:
+        return f"{int(value)} {units[unit_index]}"
+    return f"{value:.1f} {units[unit_index]}"
+
+
 def create_app() -> FastAPI:
     templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 
@@ -498,6 +519,7 @@ def create_app() -> FastAPI:
         page_size = 50
         fixed_account_id = account.id if account is not None else None
         filters = _message_filters_from_request(request, fixed_account_id=fixed_account_id)
+        stats = archive_repository.get_stats(account_id=fixed_account_id)
         total = archive_repository.count_messages(
             query=filters["q"] or None,
             account_id=filters["parsed_account_id"],
@@ -519,6 +541,7 @@ def create_app() -> FastAPI:
         account_lookup = {item.id: item for item in accounts}
         prev_url = _build_page_url(request, filters["page"] - 1) if filters["page"] > 1 else None
         next_url = _build_page_url(request, filters["page"] + 1) if offset + len(records) < total else None
+        storage_size_label = _format_bytes(_sqlite_storage_bytes(archive_repository.path))
         return templates.TemplateResponse(
             request,
             "messages.html",
@@ -532,6 +555,8 @@ def create_app() -> FastAPI:
                 total=total,
                 page=filters["page"],
                 page_size=page_size,
+                stats=stats,
+                storage_size_label=storage_size_label,
                 filters=filters,
                 prev_url=prev_url,
                 next_url=next_url,

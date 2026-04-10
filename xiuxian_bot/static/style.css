@@ -28,3 +28,5 @@ a { color: #93c5fd; text-decoration: none; }
 .table-wrap { overflow-x: auto; }
 .archive-message { margin: 0; white-space: pre-wrap; word-break: break-word; max-width: 480px; }
 .archive-pager { margin-top: 16px; }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.stat-card { background: #111827; border: 1px solid #374151; border-radius: 8px; padding: 12px; }
