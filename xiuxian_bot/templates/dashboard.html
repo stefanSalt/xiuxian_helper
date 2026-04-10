@@ -4,7 +4,10 @@
 <section class="panel">
   <div class="panel-head">
     <h1>账号列表</h1>
-    <a href="/accounts/new" class="btn">新增账号</a>
+    <div class="actions">
+      <a href="/messages" class="btn btn-light">消息归档</a>
+      <a href="/accounts/new" class="btn">新增账号</a>
+    </div>
   </div>
   <table class="table">
     <thead>
@@ -35,6 +38,7 @@
           <div class="actions">
             <a href="/accounts/{{ account.id }}/edit" class="btn btn-light">编辑</a>
             <a href="/accounts/{{ account.id }}/logs" class="btn btn-light">日志</a>
+            <a href="/accounts/{{ account.id }}/messages" class="btn btn-light">消息</a>
             <form method="post" action="/accounts/{{ account.id }}/toggle">
               <button type="submit" class="btn btn-light">{{ '禁用' if account.enabled else '启用' }}</button>
             </form>

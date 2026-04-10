@@ -10,6 +10,7 @@ from pathlib import Path
 from .config import Config, SystemConfig
 from .core.account_repository import AccountRecord, AccountRepository
 from .core.dispatcher import Dispatcher
+from .core.message_archive_repository import MessageArchiveInput, MessageArchiveRepository
 from .core.rate_limit import RateLimiter
 from .core.reliable_sender import ReliableSender
 from .core.scheduler import Scheduler
@@ -64,6 +65,45 @@ def _in_scope(config: Config, text: str, reply_to_msg_id: int | None, is_reply_t
         or (config.my_name and config.my_name in text)
         or is_reply_to_me
     )
+
+
+def _extract_topic_id_from_event(event) -> int | None:
+    message = getattr(event, "message", None)
+    reply_to = getattr(message, "reply_to", None)
+    reply_to_top_id = getattr(reply_to, "reply_to_top_id", None)
+    if isinstance(reply_to_top_id, int) and reply_to_top_id > 0:
+        return reply_to_top_id
+    reply_to_msg_id = getattr(event, "reply_to_msg_id", None)
+    is_forum_topic = bool(getattr(message, "forum_topic", False)) or bool(getattr(reply_to, "forum_topic", False))
+    if is_forum_topic and isinstance(reply_to_msg_id, int) and reply_to_msg_id > 0:
+        return reply_to_msg_id
+    if bool(getattr(message, "forum_topic", False)):
+        message_id = getattr(message, "id", None)
+        if isinstance(message_id, int) and message_id > 0:
+            return message_id
+    return None
+
+
+def _extract_sender_name_from_event(event) -> str | None:
+    sender = getattr(event, "sender", None)
+    if sender is None:
+        sender = getattr(getattr(event, "message", None), "sender", None)
+    username = getattr(sender, "username", None)
+    if isinstance(username, str) and username.strip():
+        return username.strip()
+    parts = []
+    for attr in ("first_name", "last_name", "title"):
+        value = getattr(sender, attr, None)
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+    return " ".join(parts) or None
+
+
+def _should_archive_plain_text(event, text: str, topic_id: int | None) -> bool:
+    if topic_id is None or not text.strip():
+        return False
+    message = getattr(event, "message", None)
+    return getattr(message, "media", None) is None
 
 
 def setup_root_logger(system_config: SystemConfig) -> logging.Logger:
@@ -193,6 +233,10 @@ class AccountRunner:
         if resolved_session_name != config.tg_session_name:
             config = config.with_session_name(resolved_session_name)
         scheduler = Scheduler(self._logger)
+        message_archive_repository = MessageArchiveRepository(
+            self._system_config.app_db_path,
+            self._logger,
+        )
         state_store = SQLiteStateStore(
             self._system_config.app_db_path,
             self._logger,
@@ -327,8 +371,38 @@ class AccountRunner:
                 return
             await _send(action.plugin, action.text, action.reply_to_topic)
 
-        async def _on_event(event) -> None:
+        async def _archive_message_event(event, ctx, event_type: str) -> None:
+            topic_id = _extract_topic_id_from_event(event)
+            if not _should_archive_plain_text(event, ctx.text, topic_id):
+                return
+            try:
+                message_archive_repository.archive_message(
+                    MessageArchiveInput(
+                        account_id=self.record.id,
+                        chat_id=ctx.chat_id,
+                        topic_id=topic_id,
+                        message_id=ctx.message_id,
+                        reply_to_msg_id=ctx.reply_to_msg_id,
+                        sender_id=ctx.sender_id,
+                        sender_name=_extract_sender_name_from_event(event),
+                        raw_text=ctx.text,
+                        event_type=event_type,
+                        message_ts=ctx.ts,
+                        is_reply=ctx.is_reply,
+                        is_topic_message=True,
+                    )
+                )
+            except Exception:
+                self._logger.exception(
+                    "message_archive_failed account_id=%s message_id=%s event_type=%s",
+                    self.record.id,
+                    ctx.message_id,
+                    event_type,
+                )
+
+        async def _on_event(event, event_type: str) -> None:
             ctx = await adapter.build_context(event)
+            await _archive_message_event(event, ctx, event_type)
             if not _in_scope(config, ctx.text, ctx.reply_to_msg_id, ctx.is_reply_to_me):
                 return
             if adapter.me_id is not None and ctx.sender_id != adapter.me_id:
@@ -354,9 +428,15 @@ class AccountRunner:
             for action in actions:
                 await _execute_action(action)
 
+        async def _on_new_message(event) -> None:
+            await _on_event(event, "new")
+
+        async def _on_edited_message(event) -> None:
+            await _on_event(event, "edit")
+
         try:
-            adapter.on_new_message(_on_event)
-            adapter.on_message_edited(_on_event)
+            adapter.on_new_message(_on_new_message)
+            adapter.on_message_edited(_on_edited_message)
             await adapter.start()
             pause_message = _current_pause_message()
             if pause_message is not None:
@@ -382,6 +462,7 @@ class AccountRunner:
         finally:
             await scheduler.cancel_all()
             await adapter.stop()
+            message_archive_repository.close()
             state_store.close()
 
 

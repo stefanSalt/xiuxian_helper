@@ -1,0 +1,110 @@
+{% extends 'base.html' %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>{{ title }}</h1>
+    <div class="actions">
+      {% if account %}
+      <a href="/accounts/{{ account.id }}/logs" class="btn btn-light">账号日志</a>
+      <a href="/accounts/{{ account.id }}/edit" class="btn btn-light">编辑账号</a>
+      {% endif %}
+      <a href="/" class="btn btn-light">返回</a>
+    </div>
+  </div>
+
+  <form method="get" class="grid grid-2 archive-filters">
+    <label class="field">
+      <span>关键词</span>
+      <input type="text" name="q" value="{{ filters.q }}" placeholder="搜索消息内容">
+    </label>
+    {% if not account %}
+    <label class="field">
+      <span>账号</span>
+      <select name="account_id">
+        <option value="">全部账号</option>
+        {% for item in accounts %}
+        <option value="{{ item.id }}"{% if filters.parsed_account_id == item.id %} selected{% endif %}>#{{ item.id }} - {{ item.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    <label class="field">
+      <span>话题 ID</span>
+      <input type="text" name="topic_id" value="{{ filters.topic_id }}" placeholder="如 7310786">
+    </label>
+    <label class="field">
+      <span>发送者 ID</span>
+      <input type="text" name="sender_id" value="{{ filters.sender_id }}" placeholder="TG sender_id">
+    </label>
+    <label class="field">
+      <span>事件类型</span>
+      <select name="event_type">
+        <option value="">全部</option>
+        <option value="new"{% if filters.event_type == 'new' %} selected{% endif %}>new</option>
+        <option value="edit"{% if filters.event_type == 'edit' %} selected{% endif %}>edit</option>
+      </select>
+    </label>
+    <div class="actions archive-filter-actions">
+      <button type="submit" class="btn">搜索</button>
+      <a href="{{ request.url.path }}" class="btn btn-light">清空</a>
+    </div>
+  </form>
+
+  <p class="muted">共 {{ total }} 条，当前第 {{ page }} 页，每页 {{ page_size }} 条。</p>
+
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>账号</th>
+          <th>话题</th>
+          <th>消息</th>
+          <th>事件</th>
+          <th>发送者</th>
+          <th>消息时间</th>
+          <th>归档时间</th>
+          <th>内容</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in records %}
+        {% set owner = account_lookup.get(row.account_id) %}
+        <tr>
+          <td>
+            {% if owner %}
+            <a href="/accounts/{{ row.account_id }}/messages">#{{ row.account_id }} - {{ owner.name }}</a>
+            {% else %}
+            #{{ row.account_id }}
+            {% endif %}
+          </td>
+          <td>{{ row.topic_id or '-' }}</td>
+          <td>#{{ row.message_id }} / v{{ row.edit_version }}</td>
+          <td>{{ row.event_type }}</td>
+          <td>
+            {% if row.sender_name %}{{ row.sender_name }}{% endif %}
+            {% if row.sender_id %}<div class="muted">{{ row.sender_id }}</div>{% endif %}
+          </td>
+          <td>{{ row.message_ts }}</td>
+          <td>{{ row.captured_at }}</td>
+          <td><pre class="archive-message">{{ row.raw_text }}</pre></td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="8" class="muted">暂无匹配消息</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="actions archive-pager">
+    {% if prev_url %}
+    <a href="{{ prev_url }}" class="btn btn-light">上一页</a>
+    {% endif %}
+    {% if next_url %}
+    <a href="{{ next_url }}" class="btn btn-light">下一页</a>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

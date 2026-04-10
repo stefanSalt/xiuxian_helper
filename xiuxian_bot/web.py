@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -15,6 +16,7 @@ from fastapi.templating import Jinja2Templates
 
 from .config import Config, SystemConfig
 from .core.account_repository import AccountRepository
+from .core.message_archive_repository import MessageArchiveRepository
 from .core.state_store import SQLiteStateStore
 from .runtime import RunnerManager, setup_root_logger
 
@@ -344,6 +346,26 @@ def _read_log_tail(path: Path, max_lines: int = 200) -> str:
     return "\n".join(lines[-max_lines:])
 
 
+def _parse_int_query(value: str | None, *, minimum: int | None = None) -> int | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if minimum is not None and parsed < minimum:
+        return None
+    return parsed
+
+
+def _build_page_url(request: Request, page: int) -> str:
+    params = dict(request.query_params)
+    params["page"] = str(page)
+    encoded = urlencode(params)
+    return f"{request.url.path}?{encoded}" if encoded else request.url.path
+
+
 def create_app() -> FastAPI:
     templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 
@@ -352,6 +374,7 @@ def create_app() -> FastAPI:
         system_config = SystemConfig.load()
         logger = setup_root_logger(system_config)
         repository = AccountRepository(system_config.app_db_path, logger)
+        message_archive_repository = MessageArchiveRepository(system_config.app_db_path, logger)
         migrated = repository.ensure_legacy_account(system_config)
         if migrated is not None:
             logger.warning("legacy_account_migrated account=%s id=%s", migrated.name, migrated.id)
@@ -360,6 +383,7 @@ def create_app() -> FastAPI:
         app.state.system_config = system_config
         app.state.logger = logger
         app.state.repository = repository
+        app.state.message_archive_repository = message_archive_repository
         app.state.runner_manager = manager
         if system_config.web_admin_password == "changeme":
             logger.warning("web_admin_password_is_default please_change_it")
@@ -367,6 +391,7 @@ def create_app() -> FastAPI:
             yield
         finally:
             await manager.shutdown()
+            message_archive_repository.close()
             repository.close()
 
     app = FastAPI(lifespan=lifespan)
@@ -441,6 +466,86 @@ def create_app() -> FastAPI:
             request,
             "dashboard.html",
             _ctx(request, accounts=accounts, snapshots=snapshots),
+        )
+
+    def _message_filters_from_request(request: Request, *, fixed_account_id: int | None = None) -> dict[str, Any]:
+        query = (request.query_params.get("q") or "").strip()
+        raw_event_type = (request.query_params.get("event_type") or "").strip().lower()
+        event_type = raw_event_type if raw_event_type in {"new", "edit"} else None
+        page = _parse_int_query(request.query_params.get("page"), minimum=1) or 1
+        raw_account_id = str(fixed_account_id) if fixed_account_id is not None else (request.query_params.get("account_id") or "").strip()
+        return {
+            "q": query,
+            "account_id": raw_account_id,
+            "topic_id": (request.query_params.get("topic_id") or "").strip(),
+            "sender_id": (request.query_params.get("sender_id") or "").strip(),
+            "event_type": raw_event_type,
+            "page": page,
+            "parsed_account_id": fixed_account_id if fixed_account_id is not None else _parse_int_query(raw_account_id, minimum=1),
+            "parsed_topic_id": _parse_int_query(request.query_params.get("topic_id"), minimum=1),
+            "parsed_sender_id": _parse_int_query(request.query_params.get("sender_id"), minimum=1),
+            "parsed_event_type": event_type,
+        }
+
+    def _render_message_archive_page(
+        request: Request,
+        *,
+        title: str,
+        account=None,
+    ) -> HTMLResponse:
+        repository: AccountRepository = request.app.state.repository
+        archive_repository: MessageArchiveRepository = request.app.state.message_archive_repository
+        page_size = 50
+        fixed_account_id = account.id if account is not None else None
+        filters = _message_filters_from_request(request, fixed_account_id=fixed_account_id)
+        total = archive_repository.count_messages(
+            query=filters["q"] or None,
+            account_id=filters["parsed_account_id"],
+            topic_id=filters["parsed_topic_id"],
+            sender_id=filters["parsed_sender_id"],
+            event_type=filters["parsed_event_type"],
+        )
+        offset = (filters["page"] - 1) * page_size
+        records = archive_repository.search_messages(
+            query=filters["q"] or None,
+            account_id=filters["parsed_account_id"],
+            topic_id=filters["parsed_topic_id"],
+            sender_id=filters["parsed_sender_id"],
+            event_type=filters["parsed_event_type"],
+            limit=page_size,
+            offset=offset,
+        )
+        accounts = repository.list_accounts()
+        account_lookup = {item.id: item for item in accounts}
+        prev_url = _build_page_url(request, filters["page"] - 1) if filters["page"] > 1 else None
+        next_url = _build_page_url(request, filters["page"] + 1) if offset + len(records) < total else None
+        return templates.TemplateResponse(
+            request,
+            "messages.html",
+            _ctx(
+                request,
+                title=title,
+                account=account,
+                accounts=accounts,
+                account_lookup=account_lookup,
+                records=records,
+                total=total,
+                page=filters["page"],
+                page_size=page_size,
+                filters=filters,
+                prev_url=prev_url,
+                next_url=next_url,
+            ),
+        )
+
+    @app.get("/messages", response_class=HTMLResponse)
+    async def message_archive(request: Request):
+        system_config: SystemConfig = request.app.state.system_config
+        if not _is_authenticated(request, system_config):
+            return _redirect_login()
+        return _render_message_archive_page(
+            request,
+            title="消息归档",
         )
 
     @app.get("/accounts/new", response_class=HTMLResponse)
@@ -630,6 +735,21 @@ def create_app() -> FastAPI:
                 snapshot=snapshot,
                 content=content,
             ),
+        )
+
+    @app.get("/accounts/{account_id}/messages", response_class=HTMLResponse)
+    async def account_messages(request: Request, account_id: int):
+        system_config: SystemConfig = request.app.state.system_config
+        if not _is_authenticated(request, system_config):
+            return _redirect_login()
+        repository: AccountRepository = request.app.state.repository
+        record = repository.get_account(account_id)
+        if record is None:
+            return RedirectResponse("/", status_code=303)
+        return _render_message_archive_page(
+            request,
+            title=f"账号消息 #{account_id}",
+            account=record,
         )
 
     return app
