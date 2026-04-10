@@ -37,6 +37,9 @@ CHECKBOX_FIELDS = {
     "enable_xinggong_guanxing",
     "enable_yuanying_liefeng",
     "enable_chuangta",
+    "enable_lingxiaogong",
+    "enable_lingxiaogong_wenxintai",
+    "enable_lingxiaogong_dengtianjie",
 }
 
 FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
@@ -73,6 +76,7 @@ FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
             {"name": "enable_xinggong", "label": "星宫", "type": "checkbox"},
             {"name": "enable_yuanying", "label": "元婴", "type": "checkbox"},
             {"name": "enable_chuangta", "label": "闯塔", "type": "checkbox"},
+            {"name": "enable_lingxiaogong", "label": "凌霄宫", "type": "checkbox"},
             {"name": "enable_zongmen", "label": "宗门", "type": "checkbox"},
         ],
     ),
@@ -117,6 +121,14 @@ FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
                 "step": "any",
             },
             {"name": "xinggong_guanxing_watch_events", "label": "监听事件", "type": "text"},
+        ],
+    ),
+    (
+        "凌霄宫",
+        [
+            {"name": "enable_lingxiaogong_wenxintai", "label": "自动问心台", "type": "checkbox"},
+            {"name": "enable_lingxiaogong_dengtianjie", "label": "自动登天阶", "type": "checkbox"},
+            {"name": "lingxiaogong_poll_interval_seconds", "label": "状态轮询间隔(秒)", "type": "number"},
         ],
     ),
     (
@@ -187,6 +199,10 @@ def _template_values_for_new(system_config: SystemConfig) -> dict[str, Any]:
         "yuanying_chuqiao_interval_seconds": 28800,
         "enable_chuangta": False,
         "chuangta_time": "14:15",
+        "enable_lingxiaogong": False,
+        "enable_lingxiaogong_wenxintai": True,
+        "enable_lingxiaogong_dengtianjie": True,
+        "lingxiaogong_poll_interval_seconds": 300,
         "zongmen_cmd_dianmao": ".宗门点卯",
         "zongmen_cmd_chuangong": ".宗门传功",
         "zongmen_dianmao_time": "",
@@ -283,6 +299,21 @@ def _reconcile_runtime_state_for_config_change(
                         "yuanying",
                         {"liefeng_blocked_until", "liefeng_block_source"},
                     )
+
+        if (
+            previous_config.enable_lingxiaogong != current_config.enable_lingxiaogong
+            or previous_config.enable_lingxiaogong_wenxintai
+            != current_config.enable_lingxiaogong_wenxintai
+            or previous_config.enable_lingxiaogong_dengtianjie
+            != current_config.enable_lingxiaogong_dengtianjie
+            or previous_config.lingxiaogong_poll_interval_seconds
+            != current_config.lingxiaogong_poll_interval_seconds
+        ):
+            _drop_state_keys(
+                state_store,
+                "lingxiaogong",
+                {"next_status_at", "next_climb_at"},
+            )
     finally:
         state_store.close()
 

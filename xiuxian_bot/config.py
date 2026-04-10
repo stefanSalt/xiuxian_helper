@@ -234,6 +234,12 @@ class Config:
     enable_chuangta: bool = False
     chuangta_time: str = "14:15"
 
+    # Lingxiaogong
+    enable_lingxiaogong: bool = False
+    enable_lingxiaogong_wenxintai: bool = True
+    enable_lingxiaogong_dengtianjie: bool = True
+    lingxiaogong_poll_interval_seconds: int = 300
+
     # Identity / multi-account metadata
     account_id: str = "default"
     account_name: str = "default"
@@ -400,6 +406,22 @@ class Config:
             or "xiuxian_app.sqlite3",
             enable_chuangta=_parse_bool(data.get("enable_chuangta", False), "enable_chuangta"),
             chuangta_time=str(data.get("chuangta_time", "14:15")).strip() or "14:15",
+            enable_lingxiaogong=_parse_bool(
+                data.get("enable_lingxiaogong", False),
+                "enable_lingxiaogong",
+            ),
+            enable_lingxiaogong_wenxintai=_parse_bool(
+                data.get("enable_lingxiaogong_wenxintai", True),
+                "enable_lingxiaogong_wenxintai",
+            ),
+            enable_lingxiaogong_dengtianjie=_parse_bool(
+                data.get("enable_lingxiaogong_dengtianjie", True),
+                "enable_lingxiaogong_dengtianjie",
+            ),
+            lingxiaogong_poll_interval_seconds=_parse_int(
+                data.get("lingxiaogong_poll_interval_seconds", 300),
+                "lingxiaogong_poll_interval_seconds",
+            ),
             account_id=str(data.get("account_id", "default")).strip() or "default",
             account_name=str(data.get("account_name", "default")).strip() or "default",
         )
@@ -527,6 +549,19 @@ class Config:
             "state_db_path": _env("APP_DB_PATH") or _env("STATE_DB_PATH") or "xiuxian_app.sqlite3",
             "enable_chuangta": _get_env_bool("ENABLE_CHUANGTA", default=False),
             "chuangta_time": _get_env_str("CHUANGTA_TIME", default="14:15"),
+            "enable_lingxiaogong": _get_env_bool("ENABLE_LINGXIAOGONG", default=False),
+            "enable_lingxiaogong_wenxintai": _get_env_bool(
+                "ENABLE_LINGXIAOGONG_WENXINTAI",
+                default=True,
+            ),
+            "enable_lingxiaogong_dengtianjie": _get_env_bool(
+                "ENABLE_LINGXIAOGONG_DENGTIANJIE",
+                default=True,
+            ),
+            "lingxiaogong_poll_interval_seconds": _get_env_int(
+                "LINGXIAOGONG_POLL_INTERVAL_SECONDS",
+                default=300,
+            ),
             "account_id": "legacy-default",
             "account_name": _get_env_str("DEFAULT_ACCOUNT_NAME", default="default"),
         }

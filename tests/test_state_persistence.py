@@ -9,6 +9,7 @@ from xiuxian_bot.core.state_store import SQLiteStateStore, serialize_datetime, s
 from xiuxian_bot.plugins.biguan import AutoBiguanPlugin
 from xiuxian_bot.plugins.chuangta import AutoChuangtaPlugin
 from xiuxian_bot.plugins.garden import AutoGardenPlugin
+from xiuxian_bot.plugins.lingxiaogong import AutoLingxiaogongPlugin
 from xiuxian_bot.plugins.xinggong import AutoXinggongPlugin
 from xiuxian_bot.plugins.yuanying import AutoYuanyingPlugin
 from xiuxian_bot.plugins.zongmen import AutoZongmenPlugin
@@ -69,6 +70,10 @@ def _dummy_config(**overrides) -> Config:
         state_db_path="xiuxian_state.sqlite3",
         enable_chuangta=False,
         chuangta_time="14:15",
+        enable_lingxiaogong=False,
+        enable_lingxiaogong_wenxintai=True,
+        enable_lingxiaogong_dengtianjie=True,
+        lingxiaogong_poll_interval_seconds=300,
     )
     values.update(overrides)
     return Config(**values)
@@ -306,6 +311,47 @@ class TestStateStoreAndRestore(unittest.IsolatedAsyncioTestCase):
 
             result = await zongmen._maybe_send_chuangong(_send)  # type: ignore[attr-defined]
             self.assertEqual(result, "skip")
+            store.close()
+
+    async def test_lingxiaogong_bootstrap_restores_pending_loops(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "state.sqlite3"
+            store = SQLiteStateStore(str(path))
+            now = datetime.now()
+            store.save_state(
+                "lingxiaogong",
+                {
+                    "current_day": serialize_date(now.date()),
+                    "today_wenxin_done": True,
+                    "seal_name": "澄明",
+                    "next_status_at": serialize_datetime(now + timedelta(minutes=2)),
+                    "next_climb_at": serialize_datetime(now + timedelta(minutes=5)),
+                },
+            )
+
+            plugin = AutoLingxiaogongPlugin(
+                _dummy_config(enable_lingxiaogong=True),
+                logging.getLogger("test"),
+            )
+            plugin.set_state_store(store)
+            plugin.restore_state()
+
+            calls: list[tuple[str, float]] = []
+            sends: list[str] = []
+
+            class _FakeScheduler:
+                async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                    calls.append((key, delay_seconds))
+
+            async def _send(_plugin: str, text: str, _reply_to_topic: bool) -> int | None:
+                sends.append(text)
+                return 9001
+
+            await plugin.bootstrap(_FakeScheduler(), _send)
+            keys = {key for key, _ in calls}
+            self.assertEqual(sends, [".天阶状态"])
+            self.assertIn("lingxiaogong.status.loop", keys)
+            self.assertIn("lingxiaogong.climb.loop", keys)
             store.close()
 
 

@@ -18,6 +18,7 @@ from .plugins.biguan import AutoBiguanPlugin
 from .plugins.chuangta import AutoChuangtaPlugin
 from .plugins.daily import DailyPlugin
 from .plugins.garden import AutoGardenPlugin
+from .plugins.lingxiaogong import AutoLingxiaogongPlugin
 from .plugins.xinggong import AutoXinggongPlugin
 from .plugins.yuanying import AutoYuanyingPlugin
 from .plugins.zongmen import AutoZongmenPlugin
@@ -119,6 +120,7 @@ def build_plugins(config: Config, logger: logging.Logger) -> list[object]:
         DailyPlugin(config, logger),
         AutoGardenPlugin(config, logger),
         AutoChuangtaPlugin(config, logger),
+        AutoLingxiaogongPlugin(config, logger),
         AutoXinggongPlugin(config, logger),
         AutoYuanyingPlugin(config, logger),
         AutoZongmenPlugin(config, logger),
