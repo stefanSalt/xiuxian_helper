@@ -667,8 +667,10 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                                 "chuangta_time": "14:15",
                                 "enable_lingxiaogong": "on",
                                 "enable_lingxiaogong_wenxintai": "on",
+                                "enable_lingxiaogong_jiutian": "on",
                                 "enable_lingxiaogong_dengtianjie": "on",
                                 "lingxiaogong_poll_interval_seconds": "300",
+                                "lingxiaogong_wenxintai_after_climb_count": "4",
                                 "zongmen_cmd_dianmao": ".宗门点卯",
                                 "zongmen_dianmao_time": "",
                                 "zongmen_cmd_chuangong": ".宗门传功",
@@ -689,6 +691,7 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(edit_page.status_code, 200)
                         self.assertIn("编辑账号 #1", edit_page.text)
                         self.assertIn("凌霄宫", edit_page.text)
+                        self.assertIn("自动引九天罡风", edit_page.text)
 
                         logs_page = await client.get("/accounts/1/logs")
                         self.assertEqual(logs_page.status_code, 200)

@@ -65,6 +65,9 @@ cp .env.example .env
 - `WEB_ADMIN_USERNAME`
 - `WEB_ADMIN_PASSWORD`
 - `WEB_SECRET_KEY`
+- `MESSAGE_ARCHIVE_CLEANUP_ENABLED`
+- `MESSAGE_ARCHIVE_RETENTION_DAYS`
+- `MESSAGE_ARCHIVE_VACUUM_ENABLED`
 
 ### 旧版单账号迁移
 
@@ -113,6 +116,21 @@ http://127.0.0.1:8000
 - `WARNING`/`ERROR` 异常信息
 
 这样仍然符合你之前的要求：尽量只看“我发出的指令 / 系统回包”。
+
+## 消息归档保留策略
+
+消息归档存放在 `APP_DB_PATH` 对应 sqlite 的 `message_archive` 表中。
+
+当前支持系统级保留配置：
+- `MESSAGE_ARCHIVE_CLEANUP_ENABLED`：是否启用自动清理，默认 `1`
+- `MESSAGE_ARCHIVE_RETENTION_DAYS`：保留最近多少天，默认 `30`
+- `MESSAGE_ARCHIVE_VACUUM_ENABLED`：清理后是否尝试 `VACUUM` 回收物理空间，默认 `1`
+
+行为说明：
+- 启动时会先执行一次消息归档清理
+- 运行期间每 24 小时自动再清理一次
+- 清理依据是 `captured_at`，按北京时间自然日保留最近 N 天
+- 即使删除了旧记录，如果未执行 `VACUUM`，sqlite 文件大小也不一定立刻变小
 
 ## 发送可靠性
 

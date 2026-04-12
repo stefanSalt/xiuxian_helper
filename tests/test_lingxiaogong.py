@@ -12,8 +12,10 @@ def _dummy_config(
     *,
     enable_lingxiaogong: bool = True,
     enable_lingxiaogong_wenxintai: bool = True,
+    enable_lingxiaogong_jiutian: bool = True,
     enable_lingxiaogong_dengtianjie: bool = True,
     lingxiaogong_poll_interval_seconds: int = 300,
+    lingxiaogong_wenxintai_after_climb_count: int = 4,
 ) -> Config:
     return Config(
         tg_api_id=1,
@@ -72,8 +74,10 @@ def _dummy_config(
         chuangta_time="14:15",
         enable_lingxiaogong=enable_lingxiaogong,
         enable_lingxiaogong_wenxintai=enable_lingxiaogong_wenxintai,
+        enable_lingxiaogong_jiutian=enable_lingxiaogong_jiutian,
         enable_lingxiaogong_dengtianjie=enable_lingxiaogong_dengtianjie,
         lingxiaogong_poll_interval_seconds=lingxiaogong_poll_interval_seconds,
+        lingxiaogong_wenxintai_after_climb_count=lingxiaogong_wenxintai_after_climb_count,
     )
 
 
@@ -98,7 +102,7 @@ class TestLingxiaogongPlugin(unittest.IsolatedAsyncioTestCase):
         await plugin.bootstrap(_FakeScheduler(), _send)
         self.assertEqual(sends, [".天阶状态"])
 
-    async def test_status_without_wenxin_requests_wenxintai_first(self) -> None:
+    async def test_status_without_wenxin_before_threshold_requests_climb(self) -> None:
         plugin = AutoLingxiaogongPlugin(_dummy_config(), logging.getLogger("test"))
 
         sends: list[str] = []
@@ -137,7 +141,54 @@ class TestLingxiaogongPlugin(unittest.IsolatedAsyncioTestCase):
         )
 
         await plugin.on_message(ctx)
-        self.assertEqual(sends[-1], ".问心台")
+        self.assertEqual(sends[-1], ".登天阶")
+
+    async def test_status_before_wenxin_threshold_requests_climb(self) -> None:
+        plugin = AutoLingxiaogongPlugin(
+            _dummy_config(lingxiaogong_wenxintai_after_climb_count=4),
+            logging.getLogger("test"),
+        )
+
+        sends: list[str] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                return None
+
+        async def _send(_plugin: str, text: str, _reply_to_topic: bool) -> int | None:
+            sends.append(text)
+            return 1001 if text == ".天阶状态" else 1002
+
+        await plugin.bootstrap(_FakeScheduler(), _send)
+
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=2002,
+            reply_to_msg_id=1001,
+            sender_id=999,
+            text="""【凌霄云阶】
+当前进度: 4 / 12 阶
+已完成周天: 1 轮
+罡风淬体: 3 / 12 层
+下次目标: 第 5 阶
+下轮奖阶: 云门初启
+登阶冷却: 0秒
+预计消耗: 255 点修为
+当前成功率: 67%
+
+问心状态: 今日尚未问心。可使用 .问心台 获取登阶加持。
+
+凌霄神通:
+ - .引九天罡风: 3小时3分钟16秒
+ - .借天门势: 未解锁 (需完成 3 轮周天)
+""",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=True,
+        )
+
+        await plugin.on_message(ctx)
+        self.assertEqual(sends[-1], ".登天阶")
 
     async def test_status_with_existing_seal_requests_climb(self) -> None:
         plugin = AutoLingxiaogongPlugin(_dummy_config(), logging.getLogger("test"))
@@ -177,6 +228,50 @@ class TestLingxiaogongPlugin(unittest.IsolatedAsyncioTestCase):
 
         await plugin.on_message(ctx)
         self.assertEqual(sends[-1], ".登天阶")
+
+    async def test_status_with_available_jiutian_requests_jiutian_first(self) -> None:
+        plugin = AutoLingxiaogongPlugin(_dummy_config(), logging.getLogger("test"))
+
+        sends: list[str] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                return None
+
+        async def _send(_plugin: str, text: str, _reply_to_topic: bool) -> int | None:
+            sends.append(text)
+            return 1101 if text == ".天阶状态" else 1102
+
+        await plugin.bootstrap(_FakeScheduler(), _send)
+
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=2102,
+            reply_to_msg_id=1101,
+            sender_id=999,
+            text="""【凌霄云阶】
+当前进度: 0 / 12 阶
+已完成周天: 1 轮
+罡风淬体: 4 / 12 层
+下次目标: 第 1 阶
+下轮奖阶: 云门初启
+登阶冷却: 0秒
+预计消耗: 119 点修为
+当前成功率: 81%
+
+问心状态: 今日已问心，但道印已在登阶中耗尽。
+
+凌霄神通:
+ - .引九天罡风: 可用
+ - .借天门势: 未解锁 (需完成 3 轮周天)
+""",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=True,
+        )
+
+        await plugin.on_message(ctx)
+        self.assertEqual(sends[-1], ".引九天罡风")
 
     async def test_wenxintai_unknown_seal_marks_done_and_schedules_refresh(self) -> None:
         plugin = AutoLingxiaogongPlugin(_dummy_config(), logging.getLogger("test"))
@@ -257,6 +352,48 @@ class TestLingxiaogongPlugin(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(climb_delays), 1)
         self.assertGreater(climb_delays[0], 4449)
         self.assertLess(climb_delays[0], 4452)
+
+    async def test_jiutian_feedback_schedules_status_refresh_and_next_retry(self) -> None:
+        plugin = AutoLingxiaogongPlugin(_dummy_config(), logging.getLogger("test"))
+
+        scheduled: list[tuple[str, float]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                scheduled.append((key, delay_seconds))
+
+        async def _send(_plugin: str, _text: str, _reply_to_topic: bool) -> int | None:
+            return 1501
+
+        plugin._scheduler = _FakeScheduler()  # type: ignore[attr-defined]
+        plugin._send = _send  # type: ignore[attr-defined]
+        plugin._current_day = datetime.now().date()  # type: ignore[attr-defined]
+        plugin._jiutian_requested_at = datetime.now()  # type: ignore[attr-defined]
+        plugin._jiutian_request_msg_id = 1501  # type: ignore[attr-defined]
+
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=2501,
+            reply_to_msg_id=1501,
+            sender_id=999,
+            text="""【九天罡风】
+你强引九天罡风贯体，消耗了 260 点修为。
+【罡风淬体】提升至 6 / 12 层，并凝得一道【澄明】之印。
+下一次登天阶的成功率将显著提高。
+""",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=True,
+        )
+
+        await plugin.on_message(ctx)
+        self.assertFalse(plugin._today_wenxin_done)  # type: ignore[attr-defined]
+        self.assertEqual(plugin._seal_name, "澄明")  # type: ignore[attr-defined]
+        self.assertIn(("lingxiaogong.status.loop", 15.0), scheduled)
+        jiutian_delays = [delay for key, delay in scheduled if key == "lingxiaogong.jiutian.loop"]
+        self.assertEqual(len(jiutian_delays), 1)
+        self.assertGreater(jiutian_delays[0], 43199)
+        self.assertLess(jiutian_delays[0], 43202)
 
     async def test_climb_feedback_schedules_status_refresh(self) -> None:
         plugin = AutoLingxiaogongPlugin(_dummy_config(), logging.getLogger("test"))

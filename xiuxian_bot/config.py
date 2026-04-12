@@ -124,6 +124,9 @@ class SystemConfig:
     log_dir: str = "logs"
     session_root_dir: str = ""
     default_account_name: str = "default"
+    message_archive_cleanup_enabled: bool = True
+    message_archive_retention_days: int = 30
+    message_archive_vacuum_enabled: bool = True
 
     @staticmethod
     def load() -> "SystemConfig":
@@ -145,6 +148,18 @@ class SystemConfig:
             log_dir=_get_env_str("LOG_DIR", default="logs"),
             session_root_dir=_get_env_str("SESSION_ROOT_DIR", default=""),
             default_account_name=_get_env_str("DEFAULT_ACCOUNT_NAME", default="default"),
+            message_archive_cleanup_enabled=_get_env_bool(
+                "MESSAGE_ARCHIVE_CLEANUP_ENABLED",
+                default=True,
+            ),
+            message_archive_retention_days=_get_env_int(
+                "MESSAGE_ARCHIVE_RETENTION_DAYS",
+                default=30,
+            ),
+            message_archive_vacuum_enabled=_get_env_bool(
+                "MESSAGE_ARCHIVE_VACUUM_ENABLED",
+                default=True,
+            ),
         )
 
 
@@ -237,8 +252,10 @@ class Config:
     # Lingxiaogong
     enable_lingxiaogong: bool = False
     enable_lingxiaogong_wenxintai: bool = True
+    enable_lingxiaogong_jiutian: bool = True
     enable_lingxiaogong_dengtianjie: bool = True
     lingxiaogong_poll_interval_seconds: int = 300
+    lingxiaogong_wenxintai_after_climb_count: int = 4
 
     # Identity / multi-account metadata
     account_id: str = "default"
@@ -414,6 +431,10 @@ class Config:
                 data.get("enable_lingxiaogong_wenxintai", True),
                 "enable_lingxiaogong_wenxintai",
             ),
+            enable_lingxiaogong_jiutian=_parse_bool(
+                data.get("enable_lingxiaogong_jiutian", True),
+                "enable_lingxiaogong_jiutian",
+            ),
             enable_lingxiaogong_dengtianjie=_parse_bool(
                 data.get("enable_lingxiaogong_dengtianjie", True),
                 "enable_lingxiaogong_dengtianjie",
@@ -421,6 +442,10 @@ class Config:
             lingxiaogong_poll_interval_seconds=_parse_int(
                 data.get("lingxiaogong_poll_interval_seconds", 300),
                 "lingxiaogong_poll_interval_seconds",
+            ),
+            lingxiaogong_wenxintai_after_climb_count=_parse_int(
+                data.get("lingxiaogong_wenxintai_after_climb_count", 4),
+                "lingxiaogong_wenxintai_after_climb_count",
             ),
             account_id=str(data.get("account_id", "default")).strip() or "default",
             account_name=str(data.get("account_name", "default")).strip() or "default",
@@ -554,6 +579,10 @@ class Config:
                 "ENABLE_LINGXIAOGONG_WENXINTAI",
                 default=True,
             ),
+            "enable_lingxiaogong_jiutian": _get_env_bool(
+                "ENABLE_LINGXIAOGONG_JIUTIAN",
+                default=True,
+            ),
             "enable_lingxiaogong_dengtianjie": _get_env_bool(
                 "ENABLE_LINGXIAOGONG_DENGTIANJIE",
                 default=True,
@@ -561,6 +590,10 @@ class Config:
             "lingxiaogong_poll_interval_seconds": _get_env_int(
                 "LINGXIAOGONG_POLL_INTERVAL_SECONDS",
                 default=300,
+            ),
+            "lingxiaogong_wenxintai_after_climb_count": _get_env_int(
+                "LINGXIAOGONG_WENXINTAI_AFTER_CLIMB_COUNT",
+                default=4,
             ),
             "account_id": "legacy-default",
             "account_name": _get_env_str("DEFAULT_ACCOUNT_NAME", default="default"),

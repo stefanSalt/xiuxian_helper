@@ -215,6 +215,66 @@ class TestMessageArchiveRepository(unittest.TestCase):
             self.assertEqual(account_stats.last_30_days_count, 3)
             repo.close()
 
+    def test_cleanup_old_messages_respects_beijing_retention_window(self) -> None:
+        from xiuxian_bot.core.message_archive_repository import (
+            MessageArchiveInput,
+            MessageArchiveRepository,
+        )
+
+        fixed_now = datetime(2026, 4, 11, 4, 0, tzinfo=timezone.utc)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "app.sqlite3"
+            repo = MessageArchiveRepository(str(path), logging.getLogger("test"))
+            for message_id in (3001, 3002, 3003):
+                repo.archive_message(
+                    MessageArchiveInput(
+                        account_id=1,
+                        chat_id=-100,
+                        topic_id=900,
+                        message_id=message_id,
+                        reply_to_msg_id=900,
+                        sender_id=777,
+                        sender_name="tester",
+                        raw_text=f"msg-{message_id}",
+                        event_type="new",
+                        message_ts=fixed_now,
+                        is_reply=False,
+                        is_topic_message=True,
+                    )
+                )
+            repo.close()
+
+            conn = sqlite3.connect(str(path))
+            conn.execute(
+                "UPDATE message_archive SET captured_at = ? WHERE message_id = ?",
+                (datetime(2026, 3, 13, 0, 0, tzinfo=timezone.utc).isoformat(timespec="seconds"), 3001),
+            )
+            conn.execute(
+                "UPDATE message_archive SET captured_at = ? WHERE message_id = ?",
+                (datetime(2026, 3, 12, 15, 59, tzinfo=timezone.utc).isoformat(timespec="seconds"), 3002),
+            )
+            conn.execute(
+                "UPDATE message_archive SET captured_at = ? WHERE message_id = ?",
+                (datetime(2026, 4, 10, 23, 0, tzinfo=timezone.utc).isoformat(timespec="seconds"), 3003),
+            )
+            conn.commit()
+            conn.close()
+
+            repo = MessageArchiveRepository(str(path), logging.getLogger("test"))
+            result = repo.cleanup_old_messages(
+                retention_days=30,
+                now=fixed_now,
+                vacuum=False,
+            )
+
+            self.assertEqual(result.before_count, 3)
+            self.assertEqual(result.deleted_count, 1)
+            self.assertEqual(result.after_count, 2)
+            remaining = {row.message_id for row in repo.search_messages(account_id=1, limit=10)}
+            self.assertEqual(remaining, {3001, 3003})
+            repo.close()
+
 
 @unittest.skipUnless(HAS_RUNTIME_DEPS, "requires telethon runtime dependencies")
 class TestRuntimeMessageArchive(unittest.IsolatedAsyncioTestCase):
@@ -462,6 +522,117 @@ class TestWebMessageArchive(unittest.IsolatedAsyncioTestCase):
                     conn.close()
                     repository.close()
 
+                    fixed_now = datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc)
+                    transport = httpx.ASGITransport(app=app)
+                    with patch("xiuxian_bot.web._utc_now", return_value=fixed_now):
+                        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                            response = await client.post(
+                                "/login",
+                                data={"username": "admin", "password": "secret"},
+                                follow_redirects=False,
+                            )
+                            self.assertEqual(response.status_code, 303)
+
+                            global_page = await client.get("/messages?q=全局检索")
+                            self.assertEqual(global_page.status_code, 200)
+                            self.assertIn("消息归档", global_page.text)
+                            self.assertIn("全局检索目标", global_page.text)
+                            self.assertNotIn("其他消息", global_page.text)
+                            self.assertIn("总条数：2", global_page.text)
+                            self.assertIn("今日新增：1", global_page.text)
+                            self.assertIn("近7日新增：1", global_page.text)
+                            self.assertIn("近30日新增：2", global_page.text)
+                            self.assertIn("SQLite大小：", global_page.text)
+
+                            account_page = await client.get(f"/accounts/{account.id}/messages?q=全局检索")
+                            self.assertEqual(account_page.status_code, 200)
+                            self.assertIn(f"账号消息 #{account.id}", account_page.text)
+                            self.assertIn("全局检索目标", account_page.text)
+                            self.assertNotIn("其他消息", account_page.text)
+                            self.assertIn("总条数：2", account_page.text)
+
+    async def test_lifespan_cleanup_removes_expired_archive_rows(self) -> None:
+        import httpx
+
+        from xiuxian_bot.core.message_archive_repository import (
+            MessageArchiveInput,
+            MessageArchiveRepository,
+        )
+        from xiuxian_bot.web import create_app
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            system_config = SystemConfig(
+                app_db_path=str(tmp_path / "app.sqlite3"),
+                log_dir=str(tmp_path / "logs"),
+                web_admin_username="admin",
+                web_admin_password="secret",
+                web_secret_key="secret-key",
+                message_archive_cleanup_enabled=True,
+                message_archive_retention_days=30,
+                message_archive_vacuum_enabled=False,
+            )
+            fake_manager = self._fake_manager_cls(Path(system_config.log_dir))
+
+            repository = AccountRepository(system_config.app_db_path, logging.getLogger("test"))
+            account = repository.create_account("alpha", _dummy_config(account_name="alpha"), enabled=True)
+            archive = MessageArchiveRepository(system_config.app_db_path, logging.getLogger("test"))
+            now = datetime(2026, 4, 11, 4, 0, tzinfo=timezone.utc)
+            archive.archive_message(
+                MessageArchiveInput(
+                    account_id=account.id,
+                    chat_id=-100,
+                    topic_id=900,
+                    message_id=1,
+                    reply_to_msg_id=900,
+                    sender_id=111,
+                    sender_name="tester",
+                    raw_text="保留消息",
+                    event_type="new",
+                    message_ts=now,
+                    is_reply=False,
+                    is_topic_message=True,
+                )
+            )
+            archive.archive_message(
+                MessageArchiveInput(
+                    account_id=account.id,
+                    chat_id=-100,
+                    topic_id=900,
+                    message_id=2,
+                    reply_to_msg_id=900,
+                    sender_id=111,
+                    sender_name="tester",
+                    raw_text="过期消息",
+                    event_type="new",
+                    message_ts=now,
+                    is_reply=False,
+                    is_topic_message=True,
+                )
+            )
+            archive.close()
+            conn = sqlite3.connect(system_config.app_db_path)
+            conn.execute(
+                "UPDATE message_archive SET captured_at = ? WHERE message_id = ?",
+                (datetime(2026, 4, 10, 0, 0, tzinfo=timezone.utc).isoformat(timespec="seconds"), 1),
+            )
+            conn.execute(
+                "UPDATE message_archive SET captured_at = ? WHERE message_id = ?",
+                (datetime(2026, 3, 12, 15, 59, tzinfo=timezone.utc).isoformat(timespec="seconds"), 2),
+            )
+            conn.commit()
+            conn.close()
+            repository.close()
+
+            with patch("xiuxian_bot.web.SystemConfig.load", return_value=system_config), patch(
+                "xiuxian_bot.web.AccountRepository.ensure_legacy_account",
+                return_value=None,
+            ), patch("xiuxian_bot.web.RunnerManager", fake_manager), patch(
+                "xiuxian_bot.web._utc_now",
+                return_value=now,
+            ):
+                app = create_app()
+                async with app.router.lifespan_context(app):
                     transport = httpx.ASGITransport(app=app)
                     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
                         response = await client.post(
@@ -470,24 +641,10 @@ class TestWebMessageArchive(unittest.IsolatedAsyncioTestCase):
                             follow_redirects=False,
                         )
                         self.assertEqual(response.status_code, 303)
-
-                        global_page = await client.get("/messages?q=全局检索")
-                        self.assertEqual(global_page.status_code, 200)
-                        self.assertIn("消息归档", global_page.text)
-                        self.assertIn("全局检索目标", global_page.text)
-                        self.assertNotIn("其他消息", global_page.text)
-                        self.assertIn("总条数：2", global_page.text)
-                        self.assertIn("今日新增：1", global_page.text)
-                        self.assertIn("近7日新增：1", global_page.text)
-                        self.assertIn("近30日新增：2", global_page.text)
-                        self.assertIn("SQLite大小：", global_page.text)
-
-                        account_page = await client.get(f"/accounts/{account.id}/messages?q=全局检索")
-                        self.assertEqual(account_page.status_code, 200)
-                        self.assertIn(f"账号消息 #{account.id}", account_page.text)
-                        self.assertIn("全局检索目标", account_page.text)
-                        self.assertNotIn("其他消息", account_page.text)
-                        self.assertIn("总条数：2", account_page.text)
+                        page = await client.get("/messages")
+                        self.assertEqual(page.status_code, 200)
+                        self.assertIn("保留消息", page.text)
+                        self.assertNotIn("过期消息", page.text)
 
 
 if __name__ == "__main__":

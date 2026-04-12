@@ -72,8 +72,10 @@ def _dummy_config(**overrides) -> Config:
         chuangta_time="14:15",
         enable_lingxiaogong=False,
         enable_lingxiaogong_wenxintai=True,
+        enable_lingxiaogong_jiutian=True,
         enable_lingxiaogong_dengtianjie=True,
         lingxiaogong_poll_interval_seconds=300,
+        lingxiaogong_wenxintai_after_climb_count=4,
     )
     values.update(overrides)
     return Config(**values)
@@ -326,6 +328,9 @@ class TestStateStoreAndRestore(unittest.IsolatedAsyncioTestCase):
                     "seal_name": "澄明",
                     "next_status_at": serialize_datetime(now + timedelta(minutes=2)),
                     "next_climb_at": serialize_datetime(now + timedelta(minutes=5)),
+                    "today_climb_count": 3,
+                    "next_jiutian_at": serialize_datetime(now + timedelta(minutes=7)),
+                    "jiutian_cooldown_until": serialize_datetime(now + timedelta(minutes=7)),
                 },
             )
 
@@ -352,6 +357,7 @@ class TestStateStoreAndRestore(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(sends, [".天阶状态"])
             self.assertIn("lingxiaogong.status.loop", keys)
             self.assertIn("lingxiaogong.climb.loop", keys)
+            self.assertIn("lingxiaogong.jiutian.loop", keys)
             store.close()
 
 

@@ -28,11 +28,12 @@ class _StatusSnapshot:
     wenxin_done: bool | None
     seal_name: str | None
     jiutian_unlocked: bool | None
+    jiutian_cooldown_seconds: int | None
     tianmen_unlocked: bool | None
 
 
 class AutoLingxiaogongPlugin:
-    """凌霄宫自动化：天阶状态 / 问心台 / 登天阶。"""
+    """凌霄宫自动化：天阶状态 / 问心台 / 登天阶 / 引九天罡风。"""
 
     name = "lingxiaogong"
     priority = 42
@@ -46,14 +47,17 @@ class AutoLingxiaogongPlugin:
     _REPLY_WINDOW_SECONDS = 210
     _ACTION_SPACING_SECONDS = 15
     _COOLDOWN_BUFFER_SECONDS = 1
+    _JIUTIAN_COOLDOWN_SECONDS = 12 * 60 * 60
 
     def __init__(self, config: Config, logger: logging.Logger) -> None:
         self._config = config
         self._logger = logger
         self.enabled = bool(config.enable_lingxiaogong)
         self._wenxin_enabled = bool(config.enable_lingxiaogong_wenxintai)
+        self._jiutian_enabled = bool(config.enable_lingxiaogong_jiutian)
         self._climb_enabled = bool(config.enable_lingxiaogong_dengtianjie)
         self._poll_interval_seconds = max(60, int(config.lingxiaogong_poll_interval_seconds))
+        self._wenxin_after_climb_count = max(1, int(config.lingxiaogong_wenxintai_after_climb_count))
 
         self._scheduler: Scheduler | None = None
         self._send: SendFn | None = None
@@ -61,18 +65,23 @@ class AutoLingxiaogongPlugin:
 
         self._current_day: date | None = None
         self._today_wenxin_done = False
+        self._today_climb_count = 0
         self._seal_name: str | None = None
         self._jiutian_unlocked: bool | None = None
         self._tianmen_unlocked: bool | None = None
 
         self._next_status_at: datetime | None = None
         self._next_climb_at: datetime | None = None
+        self._next_jiutian_at: datetime | None = None
         self._cooldown_until: datetime | None = None
+        self._jiutian_cooldown_until: datetime | None = None
 
         self._status_requested_at: datetime | None = None
         self._status_request_msg_id: int | None = None
         self._wenxin_requested_at: datetime | None = None
         self._wenxin_request_msg_id: int | None = None
+        self._jiutian_requested_at: datetime | None = None
+        self._jiutian_request_msg_id: int | None = None
         self._climb_requested_at: datetime | None = None
         self._climb_request_msg_id: int | None = None
 
@@ -85,6 +94,7 @@ class AutoLingxiaogongPlugin:
         state = self._state_store.load_state(self.name)
         self._current_day = deserialize_date(state.get("current_day"))
         self._today_wenxin_done = bool(state.get("today_wenxin_done", False))
+        self._today_climb_count = max(0, coerce_int(state.get("today_climb_count")) or 0)
         seal_name = str(state.get("seal_name", "") or "").strip()
         self._seal_name = seal_name or None
         self._jiutian_unlocked = (
@@ -95,11 +105,15 @@ class AutoLingxiaogongPlugin:
         )
         self._next_status_at = deserialize_datetime(state.get("next_status_at"))
         self._next_climb_at = deserialize_datetime(state.get("next_climb_at"))
+        self._next_jiutian_at = deserialize_datetime(state.get("next_jiutian_at"))
         self._cooldown_until = deserialize_datetime(state.get("cooldown_until"))
+        self._jiutian_cooldown_until = deserialize_datetime(state.get("jiutian_cooldown_until"))
         self._status_requested_at = deserialize_datetime(state.get("status_requested_at"))
         self._status_request_msg_id = coerce_int(state.get("status_request_msg_id"))
         self._wenxin_requested_at = deserialize_datetime(state.get("wenxin_requested_at"))
         self._wenxin_request_msg_id = coerce_int(state.get("wenxin_request_msg_id"))
+        self._jiutian_requested_at = deserialize_datetime(state.get("jiutian_requested_at"))
+        self._jiutian_request_msg_id = coerce_int(state.get("jiutian_request_msg_id"))
         self._climb_requested_at = deserialize_datetime(state.get("climb_requested_at"))
         self._climb_request_msg_id = coerce_int(state.get("climb_request_msg_id"))
 
@@ -111,16 +125,21 @@ class AutoLingxiaogongPlugin:
             {
                 "current_day": serialize_date(self._current_day),
                 "today_wenxin_done": self._today_wenxin_done,
+                "today_climb_count": self._today_climb_count,
                 "seal_name": self._seal_name,
                 "jiutian_unlocked": self._jiutian_unlocked,
                 "tianmen_unlocked": self._tianmen_unlocked,
                 "next_status_at": serialize_datetime(self._next_status_at),
                 "next_climb_at": serialize_datetime(self._next_climb_at),
+                "next_jiutian_at": serialize_datetime(self._next_jiutian_at),
                 "cooldown_until": serialize_datetime(self._cooldown_until),
+                "jiutian_cooldown_until": serialize_datetime(self._jiutian_cooldown_until),
                 "status_requested_at": serialize_datetime(self._status_requested_at),
                 "status_request_msg_id": self._status_request_msg_id,
                 "wenxin_requested_at": serialize_datetime(self._wenxin_requested_at),
                 "wenxin_request_msg_id": self._wenxin_request_msg_id,
+                "jiutian_requested_at": serialize_datetime(self._jiutian_requested_at),
+                "jiutian_request_msg_id": self._jiutian_request_msg_id,
                 "climb_requested_at": serialize_datetime(self._climb_requested_at),
                 "climb_request_msg_id": self._climb_request_msg_id,
             },
@@ -153,37 +172,50 @@ class AutoLingxiaogongPlugin:
         return days * 86400 + hours * 3600 + minutes * 60 + seconds
 
     def _parse_status_snapshot(self, text: str) -> _StatusSnapshot | None:
-        compact = self._compact_text(text)
         normalized = normalize_match_text(text)
         if not any(anchor in normalized for anchor in ("当前云阶进度", "登阶冷却", "问心状态", "罡风淬体")):
             return None
 
         cooldown_seconds: int | None = None
-        cooldown_match = re.search(r"登阶冷却[:：]([^\n\r]+)", compact)
+        cooldown_match = re.search(r"登阶冷却[:：]\s*([^\n\r]+)", text)
         if cooldown_match is not None:
             cooldown_seconds = self._parse_duration_seconds(cooldown_match.group(1))
 
         wenxin_done: bool | None = None
         seal_name: str | None = None
-        seal_match = re.search(r"问心状态[:：]【([^】]+)】", compact)
+        seal_match = re.search(r"问心状态[:：]\s*【([^】]+)】", text)
         if seal_match is not None:
             wenxin_done = True
             seal_name = seal_match.group(1).strip()
         elif "今日已问心但道印已在登阶中耗尽" in normalized:
             wenxin_done = True
-        elif "问心状态尚未问心" in normalized or "问心状态未问心" in normalized:
+        elif "今日尚未问心" in normalized or "问心状态尚未问心" in normalized or "问心状态未问心" in normalized:
             wenxin_done = False
 
         jiutian_unlocked: bool | None = None
-        if "引九天罡风:未解锁" in compact:
-            jiutian_unlocked = False
-        elif self._CMD_JIUTIAN in text or "引九天罡风:" in compact:
-            jiutian_unlocked = True
+        jiutian_cooldown_seconds: int | None = None
+        jiutian_match = re.search(r"引九天罡风[:：]\s*([^\n\r]+)", text)
+        if jiutian_match is not None:
+            jiutian_value = jiutian_match.group(1).strip()
+            jiutian_normalized = normalize_match_text(jiutian_value)
+            if "未解锁" in jiutian_normalized:
+                jiutian_unlocked = False
+            elif "可用" in jiutian_normalized:
+                jiutian_unlocked = True
+                jiutian_cooldown_seconds = 0
+            else:
+                cooldown = self._parse_duration_seconds(jiutian_value)
+                if cooldown is not None:
+                    jiutian_unlocked = True
+                    jiutian_cooldown_seconds = cooldown
+                elif self._CMD_JIUTIAN in text or "引九天罡风" in jiutian_normalized:
+                    jiutian_unlocked = True
 
         tianmen_unlocked: bool | None = None
-        if "借天门势:未解锁" in compact:
+        tianmen_match = re.search(r"借天门势[:：]\s*([^\n\r]+)", text)
+        if tianmen_match is not None and "未解锁" in normalize_match_text(tianmen_match.group(1)):
             tianmen_unlocked = False
-        elif self._CMD_TIANMEN in text or "借天门势:" in compact:
+        elif self._CMD_TIANMEN in text or "借天门势" in normalized:
             tianmen_unlocked = True
 
         return _StatusSnapshot(
@@ -191,6 +223,7 @@ class AutoLingxiaogongPlugin:
             wenxin_done=wenxin_done,
             seal_name=seal_name,
             jiutian_unlocked=jiutian_unlocked,
+            jiutian_cooldown_seconds=jiutian_cooldown_seconds,
             tianmen_unlocked=tianmen_unlocked,
         )
 
@@ -218,6 +251,17 @@ class AutoLingxiaogongPlugin:
             return "result"
         return None
 
+    def _parse_jiutian_feedback(self, text: str) -> tuple[str, str | None] | None:
+        normalized = normalize_match_text(text)
+        if "九天罡风尚未再聚" in normalized and "后再施展此术" in normalized:
+            return "cooldown", None
+        if "九天罡风" not in normalized:
+            return None
+        if "贯体" in normalized or "罡风淬体" in normalized:
+            seal_match = re.search(r"凝得一道【([^】]+)】之印", text)
+            return "success", seal_match.group(1).strip() if seal_match is not None else None
+        return None
+
     def _clear_status_request(self, *, save: bool = True) -> None:
         self._status_requested_at = None
         self._status_request_msg_id = None
@@ -230,20 +274,35 @@ class AutoLingxiaogongPlugin:
         if save:
             self._save_state()
 
+    def _clear_jiutian_request(self, *, save: bool = True) -> None:
+        self._jiutian_requested_at = None
+        self._jiutian_request_msg_id = None
+        if save:
+            self._save_state()
+
     def _clear_climb_request(self, *, save: bool = True) -> None:
         self._climb_requested_at = None
         self._climb_request_msg_id = None
         if save:
             self._save_state()
 
+    def _should_request_wenxin(self) -> bool:
+        return (
+            self._wenxin_enabled
+            and not self._today_wenxin_done
+            and self._today_climb_count >= self._wenxin_after_climb_count
+        )
+
     def _reset_if_new_day(self, now: datetime) -> None:
         if self._current_day == now.date():
             return
         self._current_day = now.date()
         self._today_wenxin_done = False
+        self._today_climb_count = 0
         self._seal_name = None
         self._clear_status_request(save=False)
         self._clear_wenxin_request(save=False)
+        self._clear_jiutian_request(save=False)
         self._clear_climb_request(save=False)
         self._save_state()
 
@@ -258,6 +317,8 @@ class AutoLingxiaogongPlugin:
             await self._schedule_status_loop((self._next_status_at - now).total_seconds())
         if self._next_climb_at is not None and self._next_climb_at > now and self._climb_enabled:
             await self._schedule_climb_loop((self._next_climb_at - now).total_seconds())
+        if self._next_jiutian_at is not None and self._next_jiutian_at > now and self._jiutian_enabled:
+            await self._schedule_jiutian_loop((self._next_jiutian_at - now).total_seconds())
         await self._status_loop()
 
     async def _schedule_status_loop(self, delay_seconds: float) -> None:
@@ -331,6 +392,35 @@ class AutoLingxiaogongPlugin:
             action=_runner,
         )
 
+    async def _schedule_jiutian_loop(self, delay_seconds: float) -> None:
+        if self._scheduler is None:
+            return
+        delay_seconds = max(0.0, delay_seconds)
+        self._next_jiutian_at = datetime.now() + timedelta(seconds=delay_seconds)
+        self._save_state()
+
+        async def _runner() -> None:
+            await self._jiutian_loop()
+
+        await self._scheduler.schedule(
+            key="lingxiaogong.jiutian.loop",
+            delay_seconds=delay_seconds,
+            action=_runner,
+        )
+
+    async def _schedule_jiutian_timeout(self, delay_seconds: float) -> None:
+        if self._scheduler is None:
+            return
+
+        async def _runner() -> None:
+            await self._jiutian_timeout_loop()
+
+        await self._scheduler.schedule(
+            key="lingxiaogong.jiutian.timeout",
+            delay_seconds=max(0.0, delay_seconds),
+            action=_runner,
+        )
+
     async def _status_loop(self) -> None:
         if not self.enabled or self._send is None:
             return
@@ -376,7 +466,15 @@ class AutoLingxiaogongPlugin:
         if self._cooldown_until is not None and now < self._cooldown_until:
             await self._schedule_climb_loop((self._cooldown_until - now).total_seconds())
             return
-        if self._wenxin_enabled and not self._today_wenxin_done:
+        if (
+            self._jiutian_enabled
+            and self._jiutian_requested_at is None
+            and self._jiutian_unlocked is True
+            and (self._jiutian_cooldown_until is None or now >= self._jiutian_cooldown_until)
+        ):
+            await self._jiutian_loop()
+            return
+        if self._should_request_wenxin():
             await self._status_loop()
             return
         if self._climb_requested_at is not None:
@@ -390,6 +488,30 @@ class AutoLingxiaogongPlugin:
         self._climb_request_msg_id = msg_id
         self._save_state()
         await self._schedule_climb_timeout(float(self._REPLY_WINDOW_SECONDS))
+
+    async def _jiutian_loop(self) -> None:
+        if not self.enabled or not self._jiutian_enabled or self._send is None:
+            return
+        self._reset_if_new_day(datetime.now())
+        self._next_jiutian_at = None
+        self._save_state()
+        now = datetime.now()
+        if self._jiutian_unlocked is False:
+            return
+        if self._jiutian_cooldown_until is not None and now < self._jiutian_cooldown_until:
+            await self._schedule_jiutian_loop((self._jiutian_cooldown_until - now).total_seconds())
+            return
+        if self._jiutian_requested_at is not None:
+            return
+        requested_at = datetime.now()
+        msg_id = await self._send(self.name, self._CMD_JIUTIAN, True)
+        if msg_id is None:
+            await self._schedule_status_loop(float(self._poll_interval_seconds))
+            return
+        self._jiutian_requested_at = requested_at
+        self._jiutian_request_msg_id = msg_id
+        self._save_state()
+        await self._schedule_jiutian_timeout(float(self._REPLY_WINDOW_SECONDS))
 
     async def _status_timeout_loop(self) -> None:
         requested_at = self._status_requested_at
@@ -421,6 +543,16 @@ class AutoLingxiaogongPlugin:
         self._save_state()
         await self._schedule_status_loop(float(self._poll_interval_seconds))
 
+    async def _jiutian_timeout_loop(self) -> None:
+        requested_at = self._jiutian_requested_at
+        if requested_at is None:
+            return
+        if (datetime.now() - requested_at).total_seconds() < self._REPLY_WINDOW_SECONDS:
+            return
+        self._clear_jiutian_request(save=False)
+        self._save_state()
+        await self._schedule_status_loop(float(self._poll_interval_seconds))
+
     def _request_expired(self, requested_at: datetime | None, now: datetime) -> bool:
         return requested_at is not None and (now - requested_at).total_seconds() > self._REPLY_WINDOW_SECONDS
 
@@ -433,6 +565,9 @@ class AutoLingxiaogongPlugin:
             self._seal_name = snapshot.seal_name
         if snapshot.jiutian_unlocked is not None:
             self._jiutian_unlocked = snapshot.jiutian_unlocked
+            if snapshot.jiutian_unlocked is False:
+                self._jiutian_cooldown_until = None
+                self._next_jiutian_at = None
         if snapshot.tianmen_unlocked is not None:
             self._tianmen_unlocked = snapshot.tianmen_unlocked
 
@@ -449,10 +584,29 @@ class AutoLingxiaogongPlugin:
             self._cooldown_until = None
             self._next_climb_at = None
 
+        if snapshot.jiutian_cooldown_seconds is not None:
+            if snapshot.jiutian_cooldown_seconds <= 0:
+                self._jiutian_cooldown_until = now
+            else:
+                self._jiutian_cooldown_until = now + timedelta(
+                    seconds=snapshot.jiutian_cooldown_seconds + self._COOLDOWN_BUFFER_SECONDS
+                )
+            if self._jiutian_enabled and self._jiutian_unlocked is True:
+                await self._schedule_jiutian_loop((self._jiutian_cooldown_until - now).total_seconds())
+
         self._save_state()
         await self._schedule_status_loop(float(self._poll_interval_seconds))
 
-        if self._wenxin_enabled and not self._today_wenxin_done and self._wenxin_requested_at is None:
+        if (
+            self._jiutian_enabled
+            and self._jiutian_requested_at is None
+            and self._jiutian_unlocked is True
+            and (self._jiutian_cooldown_until is None or now >= self._jiutian_cooldown_until)
+        ):
+            await self._jiutian_loop()
+            return
+
+        if self._should_request_wenxin() and self._wenxin_requested_at is None:
             await self._request_wenxin()
             return
 
@@ -460,6 +614,7 @@ class AutoLingxiaogongPlugin:
             self._climb_enabled
             and self._climb_requested_at is None
             and self._wenxin_requested_at is None
+            and self._jiutian_requested_at is None
             and (self._cooldown_until is None or now >= self._cooldown_until)
         ):
             await self._climb_loop()
@@ -500,6 +655,36 @@ class AutoLingxiaogongPlugin:
                 await self._schedule_status_loop(float(self._ACTION_SPACING_SECONDS))
                 return None
 
+        jiutian_feedback = self._parse_jiutian_feedback(text)
+        if jiutian_feedback is not None:
+            if self._request_expired(self._jiutian_requested_at, now):
+                self._clear_jiutian_request()
+            if self._jiutian_requested_at is not None and (
+                (self._jiutian_request_msg_id is not None and ctx.reply_to_msg_id == self._jiutian_request_msg_id)
+                or ctx.is_reply_to_me
+            ):
+                self._clear_jiutian_request(save=False)
+                self._jiutian_unlocked = True
+                if jiutian_feedback[0] == "cooldown":
+                    remaining = self._parse_duration_seconds(text)
+                    if remaining is not None:
+                        self._jiutian_cooldown_until = now + timedelta(
+                            seconds=max(0, remaining) + self._COOLDOWN_BUFFER_SECONDS
+                        )
+                        self._save_state()
+                        await self._schedule_jiutian_loop((self._jiutian_cooldown_until - now).total_seconds())
+                        await self._schedule_status_loop(float(self._poll_interval_seconds))
+                        return None
+                self._jiutian_cooldown_until = now + timedelta(
+                    seconds=self._JIUTIAN_COOLDOWN_SECONDS + self._COOLDOWN_BUFFER_SECONDS
+                )
+                if jiutian_feedback[1] is not None:
+                    self._seal_name = jiutian_feedback[1]
+                self._save_state()
+                await self._schedule_jiutian_loop((self._jiutian_cooldown_until - now).total_seconds())
+                await self._schedule_status_loop(float(self._ACTION_SPACING_SECONDS))
+                return None
+
         climb_feedback = self._parse_climb_feedback_kind(text)
         if climb_feedback is not None:
             if self._request_expired(self._climb_requested_at, now):
@@ -519,6 +704,8 @@ class AutoLingxiaogongPlugin:
                         await self._schedule_climb_loop((self._cooldown_until - now).total_seconds())
                         await self._schedule_status_loop(float(self._poll_interval_seconds))
                         return None
+                if climb_feedback == "result":
+                    self._today_climb_count += 1
                 self._save_state()
                 await self._schedule_status_loop(float(self._ACTION_SPACING_SECONDS))
                 return None

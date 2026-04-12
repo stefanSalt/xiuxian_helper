@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -23,6 +25,7 @@ from .runtime import RunnerManager, setup_root_logger
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+_MESSAGE_ARCHIVE_MAINTENANCE_INTERVAL_SECONDS = 24 * 60 * 60
 
 CHECKBOX_FIELDS = {
     "send_to_topic",
@@ -41,6 +44,7 @@ CHECKBOX_FIELDS = {
     "enable_chuangta",
     "enable_lingxiaogong",
     "enable_lingxiaogong_wenxintai",
+    "enable_lingxiaogong_jiutian",
     "enable_lingxiaogong_dengtianjie",
 }
 
@@ -129,8 +133,10 @@ FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
         "凌霄宫",
         [
             {"name": "enable_lingxiaogong_wenxintai", "label": "自动问心台", "type": "checkbox"},
+            {"name": "enable_lingxiaogong_jiutian", "label": "自动引九天罡风", "type": "checkbox"},
             {"name": "enable_lingxiaogong_dengtianjie", "label": "自动登天阶", "type": "checkbox"},
             {"name": "lingxiaogong_poll_interval_seconds", "label": "状态轮询间隔(秒)", "type": "number"},
+            {"name": "lingxiaogong_wenxintai_after_climb_count", "label": "第几次登天阶后问心", "type": "number"},
         ],
     ),
     (
@@ -203,8 +209,10 @@ def _template_values_for_new(system_config: SystemConfig) -> dict[str, Any]:
         "chuangta_time": "14:15",
         "enable_lingxiaogong": False,
         "enable_lingxiaogong_wenxintai": True,
+        "enable_lingxiaogong_jiutian": True,
         "enable_lingxiaogong_dengtianjie": True,
         "lingxiaogong_poll_interval_seconds": 300,
+        "lingxiaogong_wenxintai_after_climb_count": 4,
         "zongmen_cmd_dianmao": ".宗门点卯",
         "zongmen_cmd_chuangong": ".宗门传功",
         "zongmen_dianmao_time": "",
@@ -306,15 +314,19 @@ def _reconcile_runtime_state_for_config_change(
             previous_config.enable_lingxiaogong != current_config.enable_lingxiaogong
             or previous_config.enable_lingxiaogong_wenxintai
             != current_config.enable_lingxiaogong_wenxintai
+            or previous_config.enable_lingxiaogong_jiutian
+            != current_config.enable_lingxiaogong_jiutian
             or previous_config.enable_lingxiaogong_dengtianjie
             != current_config.enable_lingxiaogong_dengtianjie
             or previous_config.lingxiaogong_poll_interval_seconds
             != current_config.lingxiaogong_poll_interval_seconds
+            or previous_config.lingxiaogong_wenxintai_after_climb_count
+            != current_config.lingxiaogong_wenxintai_after_climb_count
         ):
             _drop_state_keys(
                 state_store,
                 "lingxiaogong",
-                {"next_status_at", "next_climb_at"},
+                {"next_status_at", "next_climb_at", "next_jiutian_at"},
             )
     finally:
         state_store.close()
@@ -387,6 +399,47 @@ def _format_bytes(size: int) -> str:
     return f"{value:.1f} {units[unit_index]}"
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _run_message_archive_cleanup(
+    repository: MessageArchiveRepository,
+    system_config: SystemConfig,
+    logger: logging.Logger,
+    *,
+    now: datetime | None = None,
+):
+    if not system_config.message_archive_cleanup_enabled:
+        return None
+    result = repository.cleanup_old_messages(
+        retention_days=system_config.message_archive_retention_days,
+        now=now or _utc_now(),
+        vacuum=system_config.message_archive_vacuum_enabled,
+    )
+    if result.deleted_count > 0 or result.vacuum_attempted:
+        logger.info(
+            "message_archive_cleanup before=%s deleted=%s after=%s vacuum_attempted=%s vacuum_succeeded=%s retention_days=%s",
+            result.before_count,
+            result.deleted_count,
+            result.after_count,
+            result.vacuum_attempted,
+            result.vacuum_succeeded,
+            system_config.message_archive_retention_days,
+        )
+    return result
+
+
+async def _message_archive_maintenance_loop(
+    repository: MessageArchiveRepository,
+    system_config: SystemConfig,
+    logger: logging.Logger,
+) -> None:
+    while True:
+        await asyncio.sleep(_MESSAGE_ARCHIVE_MAINTENANCE_INTERVAL_SECONDS)
+        _run_message_archive_cleanup(repository, system_config, logger)
+
+
 def create_app() -> FastAPI:
     templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 
@@ -396,9 +449,16 @@ def create_app() -> FastAPI:
         logger = setup_root_logger(system_config)
         repository = AccountRepository(system_config.app_db_path, logger)
         message_archive_repository = MessageArchiveRepository(system_config.app_db_path, logger)
+        cleanup_task: asyncio.Task[None] | None = None
         migrated = repository.ensure_legacy_account(system_config)
         if migrated is not None:
             logger.warning("legacy_account_migrated account=%s id=%s", migrated.name, migrated.id)
+        _run_message_archive_cleanup(
+            message_archive_repository,
+            system_config,
+            logger,
+            now=_utc_now(),
+        )
         manager = RunnerManager(repository, system_config)
         await manager.start_enabled_accounts()
         app.state.system_config = system_config
@@ -406,11 +466,23 @@ def create_app() -> FastAPI:
         app.state.repository = repository
         app.state.message_archive_repository = message_archive_repository
         app.state.runner_manager = manager
+        if system_config.message_archive_cleanup_enabled:
+            cleanup_task = asyncio.create_task(
+                _message_archive_maintenance_loop(
+                    message_archive_repository,
+                    system_config,
+                    logger,
+                ),
+                name="message-archive-maintenance",
+            )
         if system_config.web_admin_password == "changeme":
             logger.warning("web_admin_password_is_default please_change_it")
         try:
             yield
         finally:
+            if cleanup_task is not None:
+                cleanup_task.cancel()
+                await asyncio.gather(cleanup_task, return_exceptions=True)
             await manager.shutdown()
             message_archive_repository.close()
             repository.close()
@@ -519,7 +591,10 @@ def create_app() -> FastAPI:
         page_size = 50
         fixed_account_id = account.id if account is not None else None
         filters = _message_filters_from_request(request, fixed_account_id=fixed_account_id)
-        stats = archive_repository.get_stats(account_id=fixed_account_id)
+        stats = archive_repository.get_stats(
+            account_id=fixed_account_id,
+            now=_utc_now(),
+        )
         total = archive_repository.count_messages(
             query=filters["q"] or None,
             account_id=filters["parsed_account_id"],

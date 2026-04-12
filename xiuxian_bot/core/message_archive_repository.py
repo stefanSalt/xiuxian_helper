@@ -56,6 +56,15 @@ class MessageArchiveStats:
     last_30_days_count: int
 
 
+@dataclass(frozen=True)
+class MessageArchiveCleanupResult:
+    before_count: int
+    deleted_count: int
+    after_count: int
+    vacuum_attempted: bool
+    vacuum_succeeded: bool
+
+
 class MessageArchiveRepository:
     def __init__(self, path: str, logger: logging.Logger | None = None) -> None:
         base = Path(path).expanduser()
@@ -261,6 +270,64 @@ class MessageArchiveRepository:
             today_count=int(row["today_count"]),
             last_7_days_count=int(row["last_7_days_count"]),
             last_30_days_count=int(row["last_30_days_count"]),
+        )
+
+    def cleanup_old_messages(
+        self,
+        *,
+        retention_days: int,
+        now: datetime | None = None,
+        vacuum: bool = False,
+    ) -> MessageArchiveCleanupResult:
+        before_count = self.count_messages()
+        if retention_days <= 0 or before_count <= 0:
+            return MessageArchiveCleanupResult(
+                before_count=before_count,
+                deleted_count=0,
+                after_count=before_count,
+                vacuum_attempted=False,
+                vacuum_succeeded=False,
+            )
+
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        else:
+            current = current.astimezone(timezone.utc)
+        cutoff_local = current.astimezone(_BEIJING_TZ).replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        ) - timedelta(days=max(retention_days - 1, 0))
+        cutoff_utc = cutoff_local.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+        cursor = self._conn.execute(
+            "DELETE FROM message_archive WHERE captured_at < ?",
+            (cutoff_utc,),
+        )
+        self._conn.commit()
+        deleted_count = int(cursor.rowcount if cursor.rowcount is not None else 0)
+        after_count = self.count_messages()
+
+        vacuum_attempted = False
+        vacuum_succeeded = False
+        if vacuum and deleted_count > 0:
+            vacuum_attempted = True
+            try:
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                self._conn.execute("VACUUM")
+                vacuum_succeeded = True
+            except sqlite3.DatabaseError as exc:
+                if self._logger is not None:
+                    self._logger.warning("message_archive_vacuum_failed error=%s", exc)
+
+        return MessageArchiveCleanupResult(
+            before_count=before_count,
+            deleted_count=deleted_count,
+            after_count=after_count,
+            vacuum_attempted=vacuum_attempted,
+            vacuum_succeeded=vacuum_succeeded,
         )
 
     def _build_search_sql(
