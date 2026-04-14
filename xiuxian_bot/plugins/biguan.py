@@ -14,6 +14,8 @@ from ..domain.parsers import parse_biguan_cooldown_minutes, parse_lingqi_cooldow
 class AutoBiguanPlugin:
     name = "biguan"
     priority = 100
+    _FEEDBACK_TIMEOUT_SECONDS = 15 * 60
+    _FEEDBACK_TIMEOUT_KEY_PREFIX = "biguan.feedback_timeout"
 
     def __init__(self, config: Config, logger: logging.Logger) -> None:
         self._config = config
@@ -26,6 +28,7 @@ class AutoBiguanPlugin:
         self._send = None
         self._state_store: SQLiteStateStore | None = None
         self._next_attempt_at: datetime | None = None
+        self._pending_feedback_deadline_at: datetime | None = None
 
     def set_state_store(self, state_store: SQLiteStateStore) -> None:
         self._state_store = state_store
@@ -35,13 +38,17 @@ class AutoBiguanPlugin:
             return
         state = self._state_store.load_state(self.name)
         self._next_attempt_at = deserialize_datetime(state.get("next_attempt_at"))
+        self._pending_feedback_deadline_at = deserialize_datetime(state.get("pending_feedback_deadline_at"))
 
     def _save_state(self) -> None:
         if self._state_store is None:
             return
         self._state_store.save_state(
             self.name,
-            {"next_attempt_at": serialize_datetime(self._next_attempt_at)},
+            {
+                "next_attempt_at": serialize_datetime(self._next_attempt_at),
+                "pending_feedback_deadline_at": serialize_datetime(self._pending_feedback_deadline_at),
+            },
         )
 
     async def bootstrap(self, scheduler: Scheduler, send) -> None:
@@ -50,9 +57,14 @@ class AutoBiguanPlugin:
         self._scheduler = scheduler
         self._send = send
         if self._next_attempt_at is None:
-            return
-        delay_seconds = max(0.0, (self._next_attempt_at - datetime.now()).total_seconds())
-        await self._schedule_next(delay_seconds)
+            if self._pending_feedback_deadline_at is None:
+                return
+        if self._next_attempt_at is not None:
+            delay_seconds = max(0.0, (self._next_attempt_at - datetime.now()).total_seconds())
+            await self._schedule_next(delay_seconds)
+        if self._pending_feedback_deadline_at is not None:
+            delay_seconds = max(0.0, (self._pending_feedback_deadline_at - datetime.now()).total_seconds())
+            await self._schedule_feedback_timeout(delay_seconds, self._pending_feedback_deadline_at)
 
     async def _schedule_next(self, delay_seconds: float) -> None:
         if self._scheduler is None:
@@ -72,7 +84,52 @@ class AutoBiguanPlugin:
             return
         self._next_attempt_at = None
         self._save_state()
+        await self._send_biguan_with_watchdog()
+
+    async def _schedule_feedback_timeout(
+        self,
+        delay_seconds: float,
+        expected_deadline: datetime,
+    ) -> None:
+        if self._scheduler is None:
+            return
+
+        async def _runner() -> None:
+            await self._run_feedback_timeout(expected_deadline)
+
+        await self._scheduler.schedule(
+            key=f"{self._FEEDBACK_TIMEOUT_KEY_PREFIX}:{expected_deadline.isoformat()}",
+            delay_seconds=max(0.0, delay_seconds),
+            action=_runner,
+        )
+
+    async def _send_biguan_with_watchdog(self) -> None:
+        if not self.enabled or self._send is None:
+            return
+        self._pending_feedback_deadline_at = datetime.now() + timedelta(seconds=self._FEEDBACK_TIMEOUT_SECONDS)
+        expected_deadline = self._pending_feedback_deadline_at
+        self._save_state()
+        if self._scheduler is not None:
+            await self._schedule_feedback_timeout(self._FEEDBACK_TIMEOUT_SECONDS, expected_deadline)
         await self._send(self.name, self._config.action_cmd_biguan, True)
+
+    async def _run_feedback_timeout(self, expected_deadline: datetime) -> None:
+        current_deadline = self._pending_feedback_deadline_at
+        if current_deadline is None or current_deadline != expected_deadline:
+            return
+        if current_deadline > datetime.now():
+            return
+        self._logger.warning(
+            "biguan_feedback_timeout_retry timeout_seconds=%s",
+            self._FEEDBACK_TIMEOUT_SECONDS,
+        )
+        await self._send_biguan_with_watchdog()
+
+    def _clear_pending_feedback(self) -> None:
+        if self._pending_feedback_deadline_at is None:
+            return
+        self._pending_feedback_deadline_at = None
+        self._save_state()
 
     async def _arm_next(self, delay_seconds: float) -> list[SendAction] | None:
         self._next_attempt_at = datetime.now() + timedelta(seconds=delay_seconds)
@@ -100,6 +157,7 @@ class AutoBiguanPlugin:
             and "闭关" in text
             and (self._config.my_name in text or ctx.is_effective_reply)
         ):
+            self._clear_pending_feedback()
             delay_seconds = random.randint(
                 self._config.biguan_retry_jitter_min_seconds,
                 self._config.biguan_retry_jitter_max_seconds,
@@ -117,6 +175,7 @@ class AutoBiguanPlugin:
             if minutes is None:
                 return None
 
+            self._clear_pending_feedback()
             delay_seconds = (
                 minutes * 60
                 + self._config.biguan_extra_buffer_seconds
@@ -140,6 +199,7 @@ class AutoBiguanPlugin:
             if total_seconds is None:
                 return None
 
+            self._clear_pending_feedback()
             delay_seconds = total_seconds + random.randint(
                 self._config.biguan_retry_jitter_min_seconds,
                 self._config.biguan_retry_jitter_max_seconds,

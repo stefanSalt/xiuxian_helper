@@ -1,6 +1,7 @@
 import logging
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from xiuxian_bot.config import Config
 from xiuxian_bot.core.contracts import MessageContext
@@ -96,7 +97,78 @@ class TestBiguanPlugin(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(actions[0].key, "biguan.next")
         self.assertEqual(actions[0].delay_seconds, 3)
 
+    async def test_retries_when_feedback_missing_for_15_minutes(self) -> None:
+        plugin = AutoBiguanPlugin(_dummy_config(), logging.getLogger("test"))
+        scheduled: list[tuple[str, float, object]] = []
+        send_calls: list[tuple[str, str, bool]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                scheduled.append((key, delay_seconds, action))
+
+        async def _send(plugin_name: str, text: str, reply_to_topic: bool) -> int | None:
+            send_calls.append((plugin_name, text, reply_to_topic))
+            return 1
+
+        await plugin.bootstrap(_FakeScheduler(), _send)
+        await plugin._run_next()  # type: ignore[attr-defined]
+
+        self.assertEqual(send_calls, [("biguan", ".闭关修炼", True)])
+        timeout_key, _, timeout_action = next(
+            entry for entry in scheduled if entry[0].startswith("biguan.feedback_timeout:")
+        )
+        self.assertTrue(timeout_key.startswith("biguan.feedback_timeout:"))
+
+        expected_deadline = plugin._pending_feedback_deadline_at  # type: ignore[attr-defined]
+        assert expected_deadline is not None
+        with patch("xiuxian_bot.plugins.biguan.datetime", wraps=datetime) as mock_datetime:
+            mock_datetime.now.return_value = expected_deadline + timedelta(seconds=1)
+            await timeout_action()
+
+        self.assertEqual(len(send_calls), 2)
+        self.assertEqual(send_calls[-1], ("biguan", ".闭关修炼", True))
+
+    async def test_valid_feedback_clears_watchdog_and_blocks_stale_retry(self) -> None:
+        plugin = AutoBiguanPlugin(_dummy_config(), logging.getLogger("test"))
+        scheduled: list[tuple[str, float, object]] = []
+        send_calls: list[tuple[str, str, bool]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                scheduled.append((key, delay_seconds, action))
+
+        async def _send(plugin_name: str, text: str, reply_to_topic: bool) -> int | None:
+            send_calls.append((plugin_name, text, reply_to_topic))
+            return 1
+
+        await plugin.bootstrap(_FakeScheduler(), _send)
+        await plugin._run_next()  # type: ignore[attr-defined]
+
+        expected_deadline = plugin._pending_feedback_deadline_at  # type: ignore[attr-defined]
+        assert expected_deadline is not None
+        _, _, timeout_action = next(
+            entry for entry in scheduled if entry[0].startswith("biguan.feedback_timeout:")
+        )
+
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=2,
+            reply_to_msg_id=123,
+            sender_id=999,
+            text="@Me 打坐调息 10 分钟",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=True,
+        )
+        await plugin.on_message(ctx)
+        self.assertIsNone(plugin._pending_feedback_deadline_at)  # type: ignore[attr-defined]
+
+        with patch("xiuxian_bot.plugins.biguan.datetime", wraps=datetime) as mock_datetime:
+            mock_datetime.now.return_value = expected_deadline + timedelta(seconds=1)
+            await timeout_action()
+
+        self.assertEqual(len(send_calls), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
-

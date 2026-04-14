@@ -117,6 +117,35 @@ class TestStateStoreAndRestore(unittest.IsolatedAsyncioTestCase):
             self.assertLess(calls[0][1], 310)
             store.close()
 
+    async def test_biguan_bootstrap_restores_pending_feedback_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "state.sqlite3"
+            store = SQLiteStateStore(str(path))
+            target_at = datetime.now() + timedelta(minutes=5)
+            store.save_state(
+                "biguan",
+                {"pending_feedback_deadline_at": serialize_datetime(target_at)},
+            )
+
+            plugin = AutoBiguanPlugin(_dummy_config(enable_biguan=True), logging.getLogger("test"))
+            plugin.set_state_store(store)
+            plugin.restore_state()
+
+            calls: list[tuple[str, float]] = []
+
+            class _FakeScheduler:
+                async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                    calls.append((key, delay_seconds))
+
+            async def _send(_plugin: str, _text: str, _reply_to_topic: bool) -> int | None:
+                return None
+
+            await plugin.bootstrap(_FakeScheduler(), _send)
+            self.assertTrue(calls[0][0].startswith("biguan.feedback_timeout:"))
+            self.assertGreater(calls[0][1], 290)
+            self.assertLess(calls[0][1], 310)
+            store.close()
+
     async def test_garden_bootstrap_restores_poll_time(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "state.sqlite3"
