@@ -108,11 +108,41 @@ def _extract_sender_name_from_event(event) -> str | None:
     return " ".join(parts) or None
 
 
-def _should_archive_plain_text(event, text: str, topic_id: int | None) -> bool:
-    if topic_id is None or not text.strip():
-        return False
+def _extract_media_placeholder(event) -> str | None:
     message = getattr(event, "message", None)
-    return getattr(message, "media", None) is None
+    if message is None:
+        return None
+    media_markers = (
+        ("photo", "[image]"),
+        ("sticker", "[sticker]"),
+        ("voice", "[voice]"),
+        ("audio", "[audio]"),
+        ("video_note", "[video_note]"),
+        ("video", "[video]"),
+        ("gif", "[gif]"),
+        ("poll", "[poll]"),
+        ("document", "[file]"),
+    )
+    for attr, marker in media_markers:
+        if getattr(message, attr, None) is not None:
+            return marker
+    if getattr(message, "media", None) is not None:
+        return "[media]"
+    return None
+
+
+def _build_archivable_text(event, text: str) -> str:
+    content = (text or "").strip()
+    media_placeholder = _extract_media_placeholder(event)
+    if media_placeholder and content:
+        return f"{media_placeholder}\n{content}"
+    if media_placeholder:
+        return media_placeholder
+    return content
+
+
+def _should_archive_message(archive_text: str, topic_id: int | None) -> bool:
+    return bool(topic_id is not None and archive_text.strip())
 
 
 def setup_root_logger(system_config: SystemConfig) -> logging.Logger:
@@ -382,7 +412,8 @@ class AccountRunner:
 
         async def _archive_message_event(event, ctx, event_type: str) -> None:
             topic_id = _extract_topic_id_from_event(event)
-            if not _should_archive_plain_text(event, ctx.text, topic_id):
+            archive_text = _build_archivable_text(event, ctx.text)
+            if not _should_archive_message(archive_text, topic_id):
                 return
             try:
                 message_archive_repository.archive_message(
@@ -394,7 +425,7 @@ class AccountRunner:
                         reply_to_msg_id=ctx.reply_to_msg_id,
                         sender_id=ctx.sender_id,
                         sender_name=_extract_sender_name_from_event(event),
-                        raw_text=ctx.text,
+                        raw_text=archive_text,
                         event_type=event_type,
                         message_ts=ctx.ts,
                         is_reply=ctx.is_reply,

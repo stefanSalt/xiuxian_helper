@@ -278,6 +278,46 @@ class TestMessageArchiveRepository(unittest.TestCase):
 
 @unittest.skipUnless(HAS_RUNTIME_DEPS, "requires telethon runtime dependencies")
 class TestRuntimeMessageArchive(unittest.IsolatedAsyncioTestCase):
+    def test_build_archivable_text_preserves_media_placeholder_and_text(self) -> None:
+        from xiuxian_bot.runtime import _build_archivable_text
+
+        event = SimpleNamespace(
+            message=SimpleNamespace(
+                photo=object(),
+                sticker=None,
+                voice=None,
+                audio=None,
+                video_note=None,
+                video=None,
+                gif=None,
+                poll=None,
+                document=None,
+                media=object(),
+            )
+        )
+
+        self.assertEqual(_build_archivable_text(event, "带图说明"), "[image]\n带图说明")
+
+    def test_build_archivable_text_keeps_media_only_placeholder(self) -> None:
+        from xiuxian_bot.runtime import _build_archivable_text
+
+        event = SimpleNamespace(
+            message=SimpleNamespace(
+                photo=object(),
+                sticker=None,
+                voice=None,
+                audio=None,
+                video_note=None,
+                video=None,
+                gif=None,
+                poll=None,
+                document=None,
+                media=object(),
+            )
+        )
+
+        self.assertEqual(_build_archivable_text(event, ""), "[image]")
+
     async def test_account_runner_archives_out_of_scope_topic_message(self) -> None:
         from xiuxian_bot.core.message_archive_repository import MessageArchiveRepository
         from xiuxian_bot.core.contracts import MessageContext
@@ -393,6 +433,132 @@ class TestRuntimeMessageArchive(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(rows[0].raw_text, "旁观话题消息")
             self.assertEqual(rows[0].topic_id, 900)
             self.assertEqual(rows[0].event_type, "new")
+            archive.close()
+            repo.close()
+
+    async def test_account_runner_archives_edited_media_message_with_placeholder(self) -> None:
+        from xiuxian_bot.core.message_archive_repository import MessageArchiveRepository
+        from xiuxian_bot.core.contracts import MessageContext
+        from xiuxian_bot.runtime import AccountRunner
+
+        class FakeScheduler:
+            def __init__(self, logger) -> None:  # type: ignore[no-untyped-def]
+                self.logger = logger
+
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                return None
+
+            async def cancel_all(self) -> None:
+                return None
+
+        class FakeSender:
+            def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                self.kwargs = kwargs
+
+            async def send(
+                self,
+                plugin: str,
+                text: str,
+                reply_to_topic: bool,
+                *,
+                reply_to_msg_id: int | None = None,
+            ) -> int | None:
+                _ = (plugin, text, reply_to_topic, reply_to_msg_id)
+                return 1
+
+        event = SimpleNamespace(
+            chat_id=-100,
+            sender_id=999,
+            reply_to_msg_id=900,
+            raw_text="编辑后带图说明",
+            message=SimpleNamespace(
+                id=702,
+                date=datetime.now(timezone.utc),
+                media=object(),
+                photo=object(),
+                sticker=None,
+                voice=None,
+                audio=None,
+                video_note=None,
+                video=None,
+                gif=None,
+                poll=None,
+                document=None,
+                forum_topic=False,
+                reply_to=SimpleNamespace(reply_to_top_id=None, forum_topic=True),
+                sender=None,
+            ),
+        )
+
+        class FakeAdapter:
+            def __init__(self, config, logger) -> None:  # type: ignore[no-untyped-def]
+                self.config = config
+                self.logger = logger
+                self.me_id = 1
+                self._edit_handler = None
+
+            def on_new_message(self, handler) -> None:  # type: ignore[no-untyped-def]
+                _ = handler
+
+            def on_message_edited(self, handler) -> None:  # type: ignore[no-untyped-def]
+                self._edit_handler = handler
+
+            async def start(self) -> None:
+                assert self._edit_handler is not None
+                asyncio.create_task(self._edit_handler(event))
+
+            async def send_message(
+                self,
+                text: str,
+                *,
+                reply_to_topic: bool = True,
+                reply_to_msg_id: int | None = None,
+            ) -> int | None:
+                _ = (text, reply_to_topic, reply_to_msg_id)
+                return 1
+
+            async def build_context(self, raw_event) -> MessageContext:  # type: ignore[no-untyped-def]
+                _ = raw_event
+                return MessageContext(
+                    chat_id=-100,
+                    message_id=702,
+                    reply_to_msg_id=900,
+                    sender_id=999,
+                    text="编辑后带图说明",
+                    ts=datetime.now(timezone.utc),
+                    is_reply=False,
+                    is_reply_to_me=False,
+                )
+
+            async def run_forever(self) -> None:
+                await asyncio.Future()
+
+            async def stop(self) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "app.sqlite3"
+            repo = AccountRepository(str(path), logging.getLogger("test"))
+            record = repo.create_account("alpha", _dummy_config(account_name="alpha"), enabled=True)
+            system_config = SystemConfig(app_db_path=str(path), log_dir=str(Path(tmpdir) / "logs"))
+            runner = AccountRunner(record, system_config)
+
+            with patch("xiuxian_bot.runtime.Scheduler", FakeScheduler), patch(
+                "xiuxian_bot.runtime.ReliableSender",
+                FakeSender,
+            ), patch("xiuxian_bot.runtime.TGAdapter", FakeAdapter), patch(
+                "xiuxian_bot.runtime.build_plugins",
+                return_value=[],
+            ):
+                await runner.start()
+                await asyncio.sleep(0.05)
+                await runner.stop()
+
+            archive = MessageArchiveRepository(str(path), logging.getLogger("test"))
+            rows = archive.search_messages(account_id=record.id)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].raw_text, "[image]\n编辑后带图说明")
+            self.assertEqual(rows[0].event_type, "edit")
             archive.close()
             repo.close()
 
