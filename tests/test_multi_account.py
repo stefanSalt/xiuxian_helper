@@ -634,6 +634,7 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                                 "game_chat_id": "-100123",
                                 "topic_id": "12345",
                                 "my_name": "BotOne",
+                                "system_reply_source_usernames": "hantianzunhl,other_source",
                                 "send_to_topic": "on",
                                 "enable_biguan": "on",
                                 "action_cmd_biguan": ".闭关修炼",
@@ -692,6 +693,7 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         self.assertIn("编辑账号 #1", edit_page.text)
                         self.assertIn("凌霄宫", edit_page.text)
                         self.assertIn("自动引九天罡风", edit_page.text)
+                        self.assertIn("额外系统来源", edit_page.text)
 
                         logs_page = await client.get("/accounts/1/logs")
                         self.assertEqual(logs_page.status_code, 200)

@@ -273,6 +273,52 @@ class TestLingxiaogongPlugin(unittest.IsolatedAsyncioTestCase):
         await plugin.on_message(ctx)
         self.assertEqual(sends[-1], ".引九天罡风")
 
+    async def test_system_identity_status_feedback_matches_pending_request_without_reply(self) -> None:
+        plugin = AutoLingxiaogongPlugin(_dummy_config(), logging.getLogger("test"))
+
+        sends: list[str] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                return None
+
+        async def _send(_plugin: str, text: str, _reply_to_topic: bool) -> int | None:
+            sends.append(text)
+            return 1601 if text == ".天阶状态" else 1602
+
+        await plugin.bootstrap(_FakeScheduler(), _send)
+
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=2601,
+            reply_to_msg_id=7310786,
+            sender_id=10001,
+            text="""【凌霄云阶】
+当前进度: 4 / 12 阶
+已完成周天: 1 轮
+罡风淬体: 3 / 12 层
+下次目标: 第 5 阶
+下轮奖阶: 云门初启
+登阶冷却: 0秒
+预计消耗: 255 点修为
+当前成功率: 67%
+
+问心状态: 今日尚未问心。可使用 .问心台 获取登阶加持。
+
+凌霄神通:
+ - .引九天罡风: 3小时3分钟16秒
+ - .借天门势: 未解锁 (需完成 3 轮周天)
+""",
+            ts=datetime.now(timezone.utc),
+            is_reply=False,
+            is_reply_to_me=False,
+            is_from_system_identity=True,
+            is_system_reply=True,
+        )
+
+        await plugin.on_message(ctx)
+        self.assertEqual(sends[-1], ".登天阶")
+
     async def test_wenxintai_unknown_seal_marks_done_and_schedules_refresh(self) -> None:
         plugin = AutoLingxiaogongPlugin(_dummy_config(), logging.getLogger("test"))
 

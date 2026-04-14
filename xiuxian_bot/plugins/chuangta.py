@@ -148,13 +148,13 @@ class AutoChuangtaPlugin:
         if self._status_request_msg_id is not None and ctx.reply_to_msg_id == self._status_request_msg_id:
             return True
         compact = self._compact_text(text)
-        if not ctx.is_reply_to_me:
+        if not ctx.is_effective_reply:
             return False
         return ("元婴" in compact) or ("元神" in compact) or ("窍中" in compact)
 
     def _is_chuangta_feedback(self, ctx: MessageContext, text: str, now: datetime) -> bool:
         related = False
-        if ctx.is_reply_to_me:
+        if ctx.is_effective_reply:
             related = True
         elif self._tower_sent_msg_id is not None and ctx.reply_to_msg_id == self._tower_sent_msg_id:
             related = True

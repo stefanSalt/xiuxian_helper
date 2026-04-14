@@ -98,7 +98,7 @@ class AutoBiguanPlugin:
             "冷却时间" in text
             and "重置" in text
             and "闭关" in text
-            and (self._config.my_name in text or ctx.is_reply_to_me)
+            and (self._config.my_name in text or ctx.is_effective_reply)
         ):
             delay_seconds = random.randint(
                 self._config.biguan_retry_jitter_min_seconds,
@@ -112,7 +112,7 @@ class AutoBiguanPlugin:
             return await self._arm_next(float(delay_seconds))
 
         # 1) 正常闭关冷却：打坐调息 N 分钟
-        if "打坐调息" in text and (self._config.my_name in text or ctx.is_reply_to_me):
+        if "打坐调息" in text and (self._config.my_name in text or ctx.is_effective_reply):
             minutes = parse_biguan_cooldown_minutes(text)
             if minutes is None:
                 return None
@@ -135,7 +135,7 @@ class AutoBiguanPlugin:
             return await self._arm_next(float(delay_seconds))
 
         # 2) 操作太频繁：灵气尚未平复 N分M秒
-        if "灵气尚未平复" in text and (self._config.my_name in text or ctx.is_reply_to_me):
+        if "灵气尚未平复" in text and (self._config.my_name in text or ctx.is_effective_reply):
             total_seconds = parse_lingqi_cooldown_seconds(text)
             if total_seconds is None:
                 return None

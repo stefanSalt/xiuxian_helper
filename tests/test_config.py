@@ -21,6 +21,7 @@ class TestConfig(unittest.TestCase):
                 "enable_lingxiaogong_dengtianjie": "true",
                 "lingxiaogong_poll_interval_seconds": "180",
                 "lingxiaogong_wenxintai_after_climb_count": "4",
+                "system_reply_source_usernames": "hantianzunhl,@foo, https://t.me/bar ",
             }
         )
 
@@ -30,6 +31,7 @@ class TestConfig(unittest.TestCase):
         self.assertTrue(config.enable_lingxiaogong_dengtianjie)
         self.assertEqual(config.lingxiaogong_poll_interval_seconds, 180)
         self.assertEqual(config.lingxiaogong_wenxintai_after_climb_count, 4)
+        self.assertEqual(config.system_reply_source_usernames, "hantianzunhl,@foo, https://t.me/bar")
 
     def test_from_mapping_accepts_fractional_xinggong_shift_advance_seconds(self) -> None:
         config = Config.from_mapping(
@@ -115,6 +117,7 @@ class TestConfig(unittest.TestCase):
                 "ENABLE_LINGXIAOGONG_DENGTIANJIE": "true",
                 "LINGXIAOGONG_POLL_INTERVAL_SECONDS": "240",
                 "LINGXIAOGONG_WENXINTAI_AFTER_CLIMB_COUNT": "5",
+                "SYSTEM_REPLY_SOURCE_USERNAMES": "hantianzunhl,foo",
             },
             clear=True,
         ):
@@ -127,6 +130,7 @@ class TestConfig(unittest.TestCase):
         self.assertTrue(config.enable_lingxiaogong_dengtianjie)
         self.assertEqual(config.lingxiaogong_poll_interval_seconds, 240)
         self.assertEqual(config.lingxiaogong_wenxintai_after_climb_count, 5)
+        self.assertEqual(config.system_reply_source_usernames, "hantianzunhl,foo")
 
     def test_system_config_load_accepts_message_archive_retention_fields(self) -> None:
         with patch("xiuxian_bot.config._load_dotenv", return_value=None), patch.dict(

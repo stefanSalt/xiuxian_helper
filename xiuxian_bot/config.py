@@ -256,6 +256,7 @@ class Config:
     enable_lingxiaogong_dengtianjie: bool = True
     lingxiaogong_poll_interval_seconds: int = 300
     lingxiaogong_wenxintai_after_climb_count: int = 4
+    system_reply_source_usernames: str = "hantianzunhl"
 
     # Identity / multi-account metadata
     account_id: str = "default"
@@ -447,6 +448,10 @@ class Config:
                 data.get("lingxiaogong_wenxintai_after_climb_count", 4),
                 "lingxiaogong_wenxintai_after_climb_count",
             ),
+            system_reply_source_usernames=str(
+                data.get("system_reply_source_usernames", "hantianzunhl")
+            ).strip()
+            or "hantianzunhl",
             account_id=str(data.get("account_id", "default")).strip() or "default",
             account_name=str(data.get("account_name", "default")).strip() or "default",
         )
@@ -594,6 +599,10 @@ class Config:
             "lingxiaogong_wenxintai_after_climb_count": _get_env_int(
                 "LINGXIAOGONG_WENXINTAI_AFTER_CLIMB_COUNT",
                 default=4,
+            ),
+            "system_reply_source_usernames": _get_env_str(
+                "SYSTEM_REPLY_SOURCE_USERNAMES",
+                default="hantianzunhl",
             ),
             "account_id": "legacy-default",
             "account_name": _get_env_str("DEFAULT_ACCOUNT_NAME", default="default"),

@@ -633,7 +633,7 @@ class AutoLingxiaogongPlugin:
                 self._clear_status_request()
             if self._status_requested_at is not None and (
                 (self._status_request_msg_id is not None and ctx.reply_to_msg_id == self._status_request_msg_id)
-                or ctx.is_reply_to_me
+                or ctx.is_effective_reply
             ):
                 self._clear_status_request(save=False)
                 await self._handle_status_snapshot(snapshot, now)
@@ -645,7 +645,7 @@ class AutoLingxiaogongPlugin:
                 self._clear_wenxin_request()
             if self._wenxin_requested_at is not None and (
                 (self._wenxin_request_msg_id is not None and ctx.reply_to_msg_id == self._wenxin_request_msg_id)
-                or ctx.is_reply_to_me
+                or ctx.is_effective_reply
             ):
                 self._clear_wenxin_request(save=False)
                 self._today_wenxin_done = wenxin_feedback[0]
@@ -661,7 +661,7 @@ class AutoLingxiaogongPlugin:
                 self._clear_jiutian_request()
             if self._jiutian_requested_at is not None and (
                 (self._jiutian_request_msg_id is not None and ctx.reply_to_msg_id == self._jiutian_request_msg_id)
-                or ctx.is_reply_to_me
+                or ctx.is_effective_reply
             ):
                 self._clear_jiutian_request(save=False)
                 self._jiutian_unlocked = True
@@ -691,7 +691,7 @@ class AutoLingxiaogongPlugin:
                 self._clear_climb_request()
             if self._climb_requested_at is not None and (
                 (self._climb_request_msg_id is not None and ctx.reply_to_msg_id == self._climb_request_msg_id)
-                or ctx.is_reply_to_me
+                or ctx.is_effective_reply
             ):
                 self._clear_climb_request(save=False)
                 if climb_feedback == "cooldown":

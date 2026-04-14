@@ -55,6 +55,31 @@ def _dummy_config(*, topic_id: int = 7310786) -> Config:
 
 
 class TestTGAdapter(unittest.IsolatedAsyncioTestCase):
+    async def test_start_resolves_configured_system_reply_source_ids(self) -> None:
+        adapter = TGAdapter(
+            _dummy_config().with_identity(account_id="1", account_name="alpha").__class__(
+                **{
+                    **_dummy_config().to_dict(),
+                    "system_reply_source_usernames": "https://t.me/hantianzunhl,@other_source",
+                }
+            ),
+            logging.getLogger("test.tg_adapter"),
+        )
+        adapter._client = AsyncMock()
+        adapter._client.get_me.return_value = SimpleNamespace(id=777)
+        adapter._client.get_input_entity.return_value = object()
+        adapter._client.get_entity.side_effect = [
+            SimpleNamespace(id=10001),
+            SimpleNamespace(id=10002),
+        ]
+
+        await adapter.start()
+
+        self.assertEqual(adapter.me_id, 777)
+        self.assertEqual(adapter._system_reply_source_ids, {10001, 10002})  # type: ignore[attr-defined]
+        adapter._client.get_entity.assert_any_call("hantianzunhl")
+        adapter._client.get_entity.assert_any_call("other_source")
+
     async def test_send_message_to_topic_uses_topic_root_as_reply_anchor(self) -> None:
         adapter = TGAdapter(_dummy_config(), logging.getLogger("test.tg_adapter"))
         adapter._peer = object()
@@ -78,6 +103,46 @@ class TestTGAdapter(unittest.IsolatedAsyncioTestCase):
         request = adapter._client.call_args.args[0]
         self.assertEqual(request.reply_to.reply_to_msg_id, 888888)
         self.assertEqual(request.reply_to.top_msg_id, 7310786)
+
+    async def test_build_context_marks_system_identity_sender(self) -> None:
+        adapter = TGAdapter(_dummy_config(), logging.getLogger("test.tg_adapter"))
+        adapter._me_id = 1
+        adapter._system_reply_source_ids = {10001}  # type: ignore[attr-defined]
+        event = SimpleNamespace(
+            raw_text="@Me 系统回包",
+            reply_to_msg_id=7310786,
+            is_reply=False,
+            chat_id=-100,
+            sender_id=10001,
+            message=SimpleNamespace(id=321, date=None),
+        )
+
+        ctx = await adapter.build_context(event)
+
+        self.assertEqual(ctx.sender_id, 10001)
+        self.assertTrue(ctx.is_from_system_identity)
+        self.assertFalse(ctx.is_reply_to_me)
+        self.assertTrue(ctx.is_system_reply)
+
+    async def test_build_context_marks_bot_mention_as_system_reply(self) -> None:
+        adapter = TGAdapter(_dummy_config(), logging.getLogger("test.tg_adapter"))
+        adapter._me_id = 1
+        event = SimpleNamespace(
+            raw_text="@Me 原 bot 系统回包",
+            reply_to_msg_id=7310786,
+            is_reply=False,
+            chat_id=-100,
+            sender_id=20002,
+            sender=SimpleNamespace(bot=True),
+            message=SimpleNamespace(id=654, date=None),
+        )
+
+        ctx = await adapter.build_context(event)
+
+        self.assertEqual(ctx.sender_id, 20002)
+        self.assertFalse(ctx.is_from_system_identity)
+        self.assertFalse(ctx.is_reply_to_me)
+        self.assertTrue(ctx.is_system_reply)
 
 
 if __name__ == "__main__":

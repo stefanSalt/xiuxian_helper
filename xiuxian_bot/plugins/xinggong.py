@@ -497,7 +497,7 @@ class AutoXinggongPlugin:
         self._save_state()
 
     def _is_related_qizhen_feedback(self, ctx: MessageContext, now: datetime) -> bool:
-        if ctx.is_reply_to_me:
+        if ctx.is_effective_reply:
             return True
         if self._qizhen_pending_slot not in (1, 2):
             return False
@@ -531,7 +531,7 @@ class AutoXinggongPlugin:
             return False
         if self._deep_biguan_status_msg_id is not None and ctx.reply_to_msg_id == self._deep_biguan_status_msg_id:
             return True
-        return bool(ctx.is_reply_to_me and self._parse_deep_biguan_status(text) is not None)
+        return bool(ctx.is_effective_reply and self._parse_deep_biguan_status(text) is not None)
 
     async def _schedule_deep_biguan_status_check(
         self,

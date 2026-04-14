@@ -15,6 +15,12 @@ class MessageContext:
     ts: datetime
     is_reply: bool
     is_reply_to_me: bool
+    is_from_system_identity: bool = False
+    is_system_reply: bool = False
+
+    @property
+    def is_effective_reply(self) -> bool:
+        return self.is_reply_to_me or self.is_system_reply
 
 
 @dataclass(frozen=True)
@@ -32,4 +38,3 @@ class Plugin(Protocol):
     priority: int
 
     async def on_message(self, ctx: MessageContext) -> list[SendAction] | None: ...
-

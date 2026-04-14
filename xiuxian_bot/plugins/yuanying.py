@@ -111,7 +111,7 @@ class AutoYuanyingPlugin:
         self._logger.warning("yuanying_escape_pause_activated reason=%s", self._escape_pause_reason)
 
     def _is_mine(self, ctx: MessageContext, text: str) -> bool:
-        return bool(ctx.is_reply_to_me or (self._config.my_name and self._config.my_name in text))
+        return bool(ctx.is_effective_reply or (self._config.my_name and self._config.my_name in text))
 
     def _parse_duration_seconds(self, text: str) -> int | None:
         matched = False
