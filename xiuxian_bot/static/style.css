@@ -30,3 +30,7 @@ a { color: #93c5fd; text-decoration: none; }
 .archive-pager { margin-top: 16px; }
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
 .stat-card { background: #111827; border: 1px solid #374151; border-radius: 8px; padding: 12px; }
+.identity-list { display: flex; flex-direction: column; gap: 12px; margin: 12px 0; }
+.identity-card { background: #111827; border: 1px solid #374151; border-radius: 8px; padding: 12px; }
+.identity-card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
+.identity-overrides { margin-top: 12px; padding-top: 12px; border-top: 1px solid #374151; }

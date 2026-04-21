@@ -873,7 +873,20 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                                 "switch_failure_keywords": "未找到道号或ID",
                                 "status_command": ".状态",
                                 "status_identity_header_keyword": "修士状态",
-                                "identity_profiles_json": '[{"key":"main","kind":"main","my_name":"BotOne","switch_target":"主魂","display_name":"主魂","tg_username":"salt9527"},{"key":"ruifengzi","kind":"avatar","my_name":"锐锋子","switch_target":"锐锋子","display_name":"锐锋子","game_id":"7467781636","config_overrides":{"enable_chuangta":true}}]',
+                                "identity_key": ["main", "ruifengzi"],
+                                "identity_kind": ["main", "avatar"],
+                                "identity_my_name": ["BotOne", "锐锋子"],
+                                "identity_switch_target": ["主魂", "锐锋子"],
+                                "identity_display_name": ["主魂", "锐锋子"],
+                                "identity_tg_username": ["salt9527", ""],
+                                "identity_game_id": ["", "7467781636"],
+                                "identity_override_enable_biguan": ["inherit", "off"],
+                                "identity_override_enable_garden": ["inherit", "inherit"],
+                                "identity_override_enable_xinggong": ["inherit", "inherit"],
+                                "identity_override_enable_yuanying": ["inherit", "inherit"],
+                                "identity_override_enable_chuangta": ["inherit", "on"],
+                                "identity_override_enable_lingxiaogong": ["inherit", "inherit"],
+                                "identity_override_enable_zongmen": ["inherit", "inherit"],
                                 "action_cmd_biguan": ".闭关修炼",
                                 "log_level": "INFO",
                                 "global_sends_per_minute": "6",
@@ -932,7 +945,23 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         self.assertIn("凌霄宫", edit_page.text)
                         self.assertIn("自动引九天罡风", edit_page.text)
                         self.assertIn("额外系统来源", edit_page.text)
-                        self.assertIn("身份组 JSON", edit_page.text)
+                        self.assertIn("身份配置", edit_page.text)
+                        self.assertIn("新增化身", edit_page.text)
+                        self.assertNotIn("身份组 JSON", edit_page.text)
+
+                        stored = app.state.repository.get_account(1)
+                        self.assertIsNotNone(stored)
+                        assert stored is not None
+                        self.assertEqual(stored.config.active_identity_key, "ruifengzi")
+                        avatar = stored.config.identity_by_key("ruifengzi")
+                        self.assertIsNotNone(avatar)
+                        assert avatar is not None
+                        self.assertEqual(avatar.my_name, "锐锋子")
+                        self.assertEqual(avatar.game_id, "7467781636")
+                        self.assertEqual(
+                            avatar.config_overrides,
+                            {"enable_biguan": False, "enable_chuangta": True},
+                        )
 
                         logs_page = await client.get("/accounts/1/logs")
                         self.assertEqual(logs_page.status_code, 200)

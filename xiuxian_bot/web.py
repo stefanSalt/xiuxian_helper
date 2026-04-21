@@ -49,9 +49,14 @@ CHECKBOX_FIELDS = {
     "enable_lingxiaogong_dengtianjie",
 }
 
-_IDENTITY_JSON_HELP = (
-    '[{"key":"main","kind":"main","my_name":"寒山子","switch_target":"主魂","display_name":"主魂","tg_username":"salt9527"},'
-    '{"key":"ruifengzi","kind":"avatar","my_name":"锐锋子","switch_target":"锐锋子","display_name":"锐锋子","game_id":"7467781636","config_overrides":{"enable_chuangta":true}}]'
+IDENTITY_OVERRIDE_FIELDS: tuple[dict[str, str], ...] = (
+    {"name": "enable_biguan", "label": "自动闭关"},
+    {"name": "enable_garden", "label": "小药园"},
+    {"name": "enable_xinggong", "label": "星宫"},
+    {"name": "enable_yuanying", "label": "元婴"},
+    {"name": "enable_chuangta", "label": "闯塔"},
+    {"name": "enable_lingxiaogong", "label": "凌霄宫"},
+    {"name": "enable_zongmen", "label": "宗门"},
 )
 
 FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
@@ -82,7 +87,6 @@ FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
             {"name": "switch_failure_keywords", "label": "切换失败关键词", "type": "text"},
             {"name": "status_command", "label": "状态命令", "type": "text"},
             {"name": "status_identity_header_keyword", "label": "状态头关键词", "type": "text"},
-            {"name": "identity_profiles_json", "label": "身份组 JSON", "type": "text"},
         ],
     ),
     (
@@ -200,7 +204,18 @@ def _template_values_for_new(system_config: SystemConfig) -> dict[str, Any]:
         "switch_failure_keywords": "未找到道号或ID",
         "status_command": ".状态",
         "status_identity_header_keyword": "修士状态",
-        "identity_profiles_json": _IDENTITY_JSON_HELP,
+        "identity_profiles": [
+            {
+                "key": "main",
+                "kind": "main",
+                "my_name": "",
+                "switch_target": "主魂",
+                "display_name": "主魂",
+                "game_id": "",
+                "tg_username": "",
+                "config_overrides": {},
+            }
+        ],
         "log_level": system_config.log_level,
         "global_sends_per_minute": 6,
         "plugin_sends_per_minute": 3,
@@ -258,13 +273,105 @@ def _template_values_for_account(record) -> dict[str, Any]:
     values = record.config.to_dict()
     values["name"] = record.name
     values["enabled"] = record.enabled
-    values["identity_profiles_json"] = json.dumps(
-        [profile.to_dict() for profile in record.config.identities],
-        ensure_ascii=False,
-    )
+    values["identity_profiles"] = [profile.to_dict() for profile in record.config.identities]
     for key, value in list(values.items()):
         if value is None:
             values[key] = ""
+    return values
+
+
+def _form_list(form, name: str) -> list[str]:
+    getlist = getattr(form, "getlist", None)
+    if callable(getlist):
+        return [str(value or "").strip() for value in getlist(name)]
+    value = form.get(name)
+    if isinstance(value, list):
+        return [str(item or "").strip() for item in value]
+    return [str(value or "").strip()] if value is not None else []
+
+
+def _list_get(values: list[str], index: int, default: str = "") -> str:
+    if index >= len(values):
+        return default
+    return values[index].strip()
+
+
+def _parse_identity_profiles_from_form(form) -> list[dict[str, Any]]:
+    keys = _form_list(form, "identity_key")
+    if not keys:
+        raw_identity_profiles = (form.get("identity_profiles_json") or "").strip()
+        identity_profiles = json.loads(raw_identity_profiles) if raw_identity_profiles else []
+        if identity_profiles and not isinstance(identity_profiles, list):
+            raise ValueError("身份组 JSON 必须是数组")
+        return identity_profiles
+
+    kinds = _form_list(form, "identity_kind")
+    my_names = _form_list(form, "identity_my_name")
+    switch_targets = _form_list(form, "identity_switch_target")
+    display_names = _form_list(form, "identity_display_name")
+    game_ids = _form_list(form, "identity_game_id")
+    tg_usernames = _form_list(form, "identity_tg_username")
+    override_values = {
+        field["name"]: _form_list(form, f"identity_override_{field['name']}")
+        for field in IDENTITY_OVERRIDE_FIELDS
+    }
+
+    profiles: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    for index, raw_key in enumerate(keys):
+        kind = _list_get(kinds, index, "avatar") or "avatar"
+        if index == 0:
+            kind = "main"
+        key = raw_key or ("main" if index == 0 else f"avatar_{index}")
+        my_name = _list_get(my_names, index)
+        switch_target = _list_get(switch_targets, index) or ("主魂" if kind == "main" else my_name)
+        display_name = _list_get(display_names, index) or ("主魂" if kind == "main" else my_name)
+        game_id = _list_get(game_ids, index)
+        tg_username = _list_get(tg_usernames, index).lstrip("@")
+        if not any((key, my_name, switch_target, display_name, game_id, tg_username)):
+            continue
+        if kind == "main":
+            key = "main"
+        if key in seen_keys:
+            raise ValueError(f"身份 key 重复: {key}")
+        seen_keys.add(key)
+
+        config_overrides: dict[str, bool] = {}
+        for field in IDENTITY_OVERRIDE_FIELDS:
+            value = _list_get(override_values[field["name"]], index, "inherit")
+            if value == "on":
+                config_overrides[field["name"]] = True
+            elif value == "off":
+                config_overrides[field["name"]] = False
+
+        profiles.append(
+            {
+                "key": key,
+                "kind": kind,
+                "my_name": my_name,
+                "switch_target": switch_target,
+                "display_name": display_name,
+                "game_id": game_id,
+                "tg_username": tg_username,
+                "config_overrides": config_overrides,
+            }
+        )
+
+    if not profiles:
+        raise ValueError("至少需要保留一个主魂身份")
+    if profiles[0]["kind"] != "main" or profiles[0]["key"] != "main":
+        raise ValueError("第一行身份必须是主魂")
+    return profiles
+
+
+def _template_values_from_form(form) -> dict[str, Any]:
+    values = dict(form)
+    for key in CHECKBOX_FIELDS | {"enabled"}:
+        values[key] = key in form
+    try:
+        values["identity_profiles"] = _parse_identity_profiles_from_form(form)
+    except Exception:
+        values["identity_profiles"] = []
     return values
 
 
@@ -279,10 +386,7 @@ def _build_config_from_form(form, system_config: SystemConfig) -> tuple[str, boo
                 raw[name] = (form.get(name) or "").strip()
     name = (form.get("name") or "").strip()
     enabled = "enabled" in form
-    raw_identity_profiles = (form.get("identity_profiles_json") or "").strip()
-    identity_profiles = json.loads(raw_identity_profiles) if raw_identity_profiles else []
-    if identity_profiles and not isinstance(identity_profiles, list):
-        raise ValueError("身份组 JSON 必须是数组")
+    identity_profiles = _parse_identity_profiles_from_form(form)
     raw["state_db_path"] = system_config.app_db_path
     raw["account_name"] = name or system_config.default_account_name
     raw["account_id"] = ""
@@ -581,6 +685,7 @@ def create_app() -> FastAPI:
         _ = request
         return {
             "system_config": app.state.system_config,
+            "identity_override_fields": IDENTITY_OVERRIDE_FIELDS,
             **extra,
         }
 
@@ -768,9 +873,7 @@ def create_app() -> FastAPI:
         repository: AccountRepository = request.app.state.repository
         manager: RunnerManager = request.app.state.runner_manager
         form = await request.form()
-        values = dict(form)
-        for key in CHECKBOX_FIELDS | {"enabled"}:
-            values[key] = key in form
+        values = _template_values_from_form(form)
         try:
             name, enabled, config = _build_config_from_form(form, system_config)
             record = repository.create_account(name, config, enabled=enabled)
@@ -823,9 +926,7 @@ def create_app() -> FastAPI:
         repository: AccountRepository = request.app.state.repository
         manager: RunnerManager = request.app.state.runner_manager
         form = await request.form()
-        values = dict(form)
-        for key in CHECKBOX_FIELDS | {"enabled"}:
-            values[key] = key in form
+        values = _template_values_from_form(form)
         try:
             previous_record = repository.get_account(account_id)
             if previous_record is None:
