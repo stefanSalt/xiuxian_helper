@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from typing import Callable
 
 from telethon import TelegramClient, events
 from telethon.tl import functions, types
@@ -11,13 +12,20 @@ from .core.contracts import MessageContext
 
 
 class TGAdapter:
-    def __init__(self, config: Config, logger: logging.Logger) -> None:
+    def __init__(
+        self,
+        config: Config,
+        logger: logging.Logger,
+        *,
+        identity_name_provider: Callable[[], tuple[str, ...]] | None = None,
+    ) -> None:
         self._config = config
         self._logger = logger
         self._client = TelegramClient(config.tg_session_name, config.tg_api_id, config.tg_api_hash)
         self._me_id: int | None = None
         self._peer = None
         self._system_reply_source_ids: set[int] = set()
+        self._identity_name_provider = identity_name_provider
 
     @property
     def me_id(self) -> int | None:
@@ -137,7 +145,10 @@ class TGAdapter:
 
         is_reply = bool(getattr(event, "is_reply", False))
         is_reply_to_me = False
-        mentions_me = bool(self._config.my_name and self._config.my_name in text)
+        identity_names = (
+            self._identity_name_provider() if callable(self._identity_name_provider) else self._config.all_identity_mentions
+        )
+        mentions_me = any(name and name in text for name in identity_names)
         is_from_system_identity = bool(
             isinstance(sender_id, int) and sender_id in self._system_reply_source_ids
         )
@@ -161,7 +172,7 @@ class TGAdapter:
             is_reply
             and reply_to_msg_id is not None
             and reply_to_msg_id != self._config.topic_id
-            and self._config.my_name not in text
+            and not mentions_me
         ):
             try:
                 reply_msg = await event.get_reply_message()

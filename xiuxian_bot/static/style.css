@@ -18,7 +18,7 @@ a { color: #93c5fd; text-decoration: none; }
 .grid { display: grid; gap: 12px; }
 .grid-2 { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
 .field { display: flex; flex-direction: column; gap: 6px; }
-.field input[type='text'], .field input[type='number'], .field input[type='password'], .field select { padding: 8px 10px; border-radius: 6px; border: 1px solid #4b5563; background: #111827; color: #e5e7eb; }
+.field input[type='text'], .field input[type='number'], .field input[type='password'], .field select, .field textarea { padding: 8px 10px; border-radius: 6px; border: 1px solid #4b5563; background: #111827; color: #e5e7eb; }
 .checkbox-field { flex-direction: row; align-items: center; gap: 10px; min-height: 40px; }
 .error { color: #fca5a5; }
 .muted { color: #9ca3af; font-size: 14px; }

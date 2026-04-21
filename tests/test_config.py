@@ -1,11 +1,65 @@
 import os
+import os
 import unittest
 from unittest.mock import patch
 
-from xiuxian_bot.config import Config, SystemConfig
+from xiuxian_bot.config import Config, IdentityProfile, SystemConfig
 
 
 class TestConfig(unittest.TestCase):
+    def test_from_mapping_supports_identity_profiles_and_active_identity(self) -> None:
+        config = Config.from_mapping(
+            {
+                "tg_api_id": "1",
+                "tg_api_hash": "hash",
+                "tg_session_name": "session",
+                "game_chat_id": "-100",
+                "topic_id": "123",
+                "my_name": "寒山子",
+                "active_identity_key": "ruifengzi",
+                "identity_profiles": [
+                    {
+                        "key": "main",
+                        "kind": "main",
+                        "my_name": "寒山子",
+                        "switch_target": "主魂",
+                        "display_name": "主魂",
+                        "tg_username": "salt9527",
+                    },
+                    {
+                        "key": "ruifengzi",
+                        "kind": "avatar",
+                        "my_name": "锐锋子",
+                        "switch_target": "锐锋子",
+                        "display_name": "锐锋子",
+                        "game_id": "7467781636",
+                        "config_overrides": {"enable_chuangta": True},
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(config.active_identity.key, "ruifengzi")
+        self.assertEqual(config.identities[0].tg_username, "salt9527")
+        self.assertTrue(config.apply_identity("ruifengzi").enable_chuangta)
+        self.assertEqual(config.apply_identity("ruifengzi").my_name, "锐锋子")
+
+    def test_with_identity_backfills_single_identity_profile(self) -> None:
+        config = Config.from_mapping(
+            {
+                "tg_api_id": "1",
+                "tg_api_hash": "hash",
+                "tg_session_name": "session",
+                "game_chat_id": "-100",
+                "topic_id": "123",
+                "my_name": "寒山子",
+            }
+        ).with_identity(account_id="1", account_name="alpha")
+
+        self.assertEqual(len(config.identities), 1)
+        self.assertEqual(config.identities[0].key, "main")
+        self.assertEqual(config.identities[0].my_name, "寒山子")
+
     def test_from_mapping_accepts_lingxiaogong_fields(self) -> None:
         config = Config.from_mapping(
             {

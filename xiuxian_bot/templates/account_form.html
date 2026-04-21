@@ -17,6 +17,9 @@
           {% if field.type == 'checkbox' %}
           <input type="checkbox" name="{{ field.name }}" {% if values.get(field.name) %}checked{% endif %}>
           <span>{{ field.label }}</span>
+          {% elif field.name == 'identity_profiles_json' %}
+          <span>{{ field.label }}</span>
+          <textarea name="{{ field.name }}" rows="8">{{ values.get(field.name, '') }}</textarea>
           {% else %}
           <span>{{ field.label }}</span>
           <input type="{{ field.type }}" name="{{ field.name }}" value="{{ values.get(field.name, '') }}"{% if field.step is defined %} step="{{ field.step }}"{% endif %}>

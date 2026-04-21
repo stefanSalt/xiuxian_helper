@@ -104,7 +104,7 @@ class AccountRepository:
         self._conn.execute("DELETE FROM accounts WHERE id = ?", (int(account_id),))
         self._conn.commit()
         state_store = SQLiteStateStore(str(self._path), self._logger)
-        state_store.delete_account_states(str(account_id))
+        state_store.delete_account_state_prefix(str(account_id))
         state_store.close()
 
     def count_accounts(self) -> int:
@@ -150,4 +150,12 @@ class AccountRepository:
         payload = config.to_dict()
         payload["account_id"] = ""
         payload["account_name"] = ""
+        if payload.get("identity_profiles"):
+            payload["identity_profiles"] = [
+                {
+                    **profile,
+                    "config_overrides": dict(profile.get("config_overrides") or {}),
+                }
+                for profile in payload["identity_profiles"]
+            ]
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

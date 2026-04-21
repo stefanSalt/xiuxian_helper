@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping
+
+from .domain.text_normalizer import normalize_match_text
 
 
 def _load_dotenv(path: Path) -> None:
@@ -110,6 +112,81 @@ LEGACY_ACCOUNT_ENV_KEYS = (
     "TOPIC_ID",
     "MY_NAME",
 )
+
+_MAIN_IDENTITY_KEY = "main"
+
+
+def _parse_mapping(value: Any, label: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"Invalid mapping value for {label}={value!r}")
+    return {str(key): val for key, val in value.items()}
+
+
+def _parse_identity_key(value: Any, *, fallback: str) -> str:
+    normalized = normalize_match_text(str(value or ""))
+    return normalized or fallback
+
+
+@dataclass(frozen=True)
+class IdentityProfile:
+    key: str
+    kind: str
+    my_name: str
+    switch_target: str
+    display_name: str = ""
+    game_id: str = ""
+    tg_username: str = ""
+    config_overrides: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def label(self) -> str:
+        return self.display_name.strip() or self.my_name.strip() or self.switch_target.strip() or self.key
+
+    @property
+    def is_main(self) -> bool:
+        return self.kind == "main"
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def normalized_tokens(self) -> tuple[str, ...]:
+        tokens: list[str] = []
+        for value in (
+            self.key,
+            self.my_name,
+            self.switch_target,
+            self.display_name,
+            self.game_id,
+            self.tg_username,
+        ):
+            normalized = normalize_match_text(value)
+            if normalized and normalized not in tokens:
+                tokens.append(normalized)
+        return tuple(tokens)
+
+    @staticmethod
+    def from_mapping(data: Mapping[str, Any], *, fallback_key: str, kind: str = "avatar") -> "IdentityProfile":
+        switch_target = str(data.get("switch_target", "")).strip()
+        my_name = str(data.get("my_name", "")).strip()
+        display_name = str(data.get("display_name", "")).strip()
+        game_id = str(data.get("game_id", "")).strip()
+        tg_username = str(data.get("tg_username", "")).strip().lstrip("@")
+        key = _parse_identity_key(
+            data.get("key"),
+            fallback=_parse_identity_key(switch_target or my_name or game_id or display_name, fallback=fallback_key),
+        )
+        return IdentityProfile(
+            key=key,
+            kind=str(data.get("kind", kind)).strip() or kind,
+            my_name=my_name,
+            switch_target=switch_target,
+            display_name=display_name,
+            game_id=game_id,
+            tg_username=tg_username,
+            config_overrides=_parse_mapping(data.get("config_overrides"), "config_overrides"),
+        )
 
 
 @dataclass(frozen=True)
@@ -261,9 +338,81 @@ class Config:
     # Identity / multi-account metadata
     account_id: str = "default"
     account_name: str = "default"
+    identity_profiles: tuple[IdentityProfile, ...] = field(default_factory=tuple)
+    active_identity_key: str = _MAIN_IDENTITY_KEY
+    switch_command_template: str = ".切换 {target}"
+    switch_list_command: str = ".切换"
+    switch_back_target: str = "主魂"
+    switch_success_keywords: str = "切换成功,神念已附着"
+    switch_back_success_keywords: str = "神念重归主魂肉身"
+    switch_failure_keywords: str = "未找到道号或ID"
+    status_command: str = ".状态"
+    status_identity_header_keyword: str = "修士状态"
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload["identity_profiles"] = [profile.to_dict() for profile in self.identity_profiles]
+        return payload
+
+    def _resolve_identity_profiles(self) -> tuple[IdentityProfile, ...]:
+        if self.identity_profiles:
+            return self.identity_profiles
+        default_main = IdentityProfile(
+            key=_MAIN_IDENTITY_KEY,
+            kind="main",
+            my_name=self.my_name,
+            switch_target=self.switch_back_target or "主魂",
+            display_name=self.my_name,
+        )
+        return (default_main,)
+
+    @property
+    def identities(self) -> tuple[IdentityProfile, ...]:
+        return self._resolve_identity_profiles()
+
+    @property
+    def active_identity(self) -> IdentityProfile:
+        for identity in self.identities:
+            if identity.key == self.active_identity_key:
+                return identity
+        return self.identities[0]
+
+    @property
+    def all_identity_names(self) -> tuple[str, ...]:
+        names: list[str] = []
+        for identity in self.identities:
+            candidate = identity.my_name.strip()
+            if candidate and candidate not in names:
+                names.append(candidate)
+        return tuple(names)
+
+    @property
+    def all_identity_mentions(self) -> tuple[str, ...]:
+        mentions: list[str] = list(self.all_identity_names)
+        for identity in self.identities:
+            username = identity.tg_username.strip().lstrip("@")
+            if not username:
+                continue
+            for candidate in (username, f"@{username}"):
+                if candidate not in mentions:
+                    mentions.append(candidate)
+        return tuple(mentions)
+
+    def identity_by_key(self, key: str) -> IdentityProfile | None:
+        normalized_key = _parse_identity_key(key, fallback="")
+        for identity in self.identities:
+            if identity.key == normalized_key:
+                return identity
+        return None
+
+    def apply_identity(self, identity_key: str) -> "Config":
+        identity = self.identity_by_key(identity_key)
+        if identity is None:
+            raise ValueError(f"Unknown identity key: {identity_key}")
+        overrides = dict(identity.config_overrides)
+        overrides["my_name"] = identity.my_name or self.my_name
+        overrides["active_identity_key"] = identity.key
+        return replace(self, **overrides)
 
     def with_identity(self, *, account_id: str, account_name: str, state_db_path: str | None = None) -> "Config":
         data = {
@@ -272,7 +421,15 @@ class Config:
         }
         if state_db_path is not None:
             data["state_db_path"] = state_db_path
-        return replace(self, **data)
+        updated = replace(self, **data)
+        if not updated.identity_profiles:
+            updated = replace(
+                updated,
+                identity_profiles=updated._resolve_identity_profiles(),
+            )
+        if updated.identity_by_key(updated.active_identity_key) is None:
+            updated = replace(updated, active_identity_key=updated.identities[0].key)
+        return updated
 
     def with_session_name(self, tg_session_name: str) -> "Config":
         return replace(self, tg_session_name=tg_session_name)
@@ -284,8 +441,25 @@ class Config:
         zongmen_chuangong_times = _parse_optional_str(data.get("zongmen_chuangong_times"))
         if enable_zongmen and (zongmen_dianmao_time is None or zongmen_chuangong_times is None):
             raise ValueError("启用宗门功能时必须填写点卯时间和传功时间")
+        identities_raw = data.get("identity_profiles")
+        identity_profiles: tuple[IdentityProfile, ...]
+        if isinstance(identities_raw, list):
+            parsed_profiles: list[IdentityProfile] = []
+            for index, raw_profile in enumerate(identities_raw):
+                if not isinstance(raw_profile, Mapping):
+                    raise ValueError(f"Invalid identity profile at index {index}")
+                parsed_profiles.append(
+                    IdentityProfile.from_mapping(
+                        raw_profile,
+                        fallback_key=f"avatar_{index + 1}",
+                        kind="main" if index == 0 else "avatar",
+                    )
+                )
+            identity_profiles = tuple(parsed_profiles)
+        else:
+            identity_profiles = ()
 
-        return Config(
+        config = Config(
             tg_api_id=_parse_int(data.get("tg_api_id"), "tg_api_id"),
             tg_api_hash=str(data.get("tg_api_hash", "")).strip(),
             tg_session_name=str(data.get("tg_session_name", "")).strip(),
@@ -454,6 +628,38 @@ class Config:
             or "hantianzunhl",
             account_id=str(data.get("account_id", "default")).strip() or "default",
             account_name=str(data.get("account_name", "default")).strip() or "default",
+            identity_profiles=identity_profiles,
+            active_identity_key=_parse_identity_key(
+                data.get("active_identity_key"),
+                fallback=_MAIN_IDENTITY_KEY,
+            ),
+            switch_command_template=str(data.get("switch_command_template", ".切换 {target}")).strip()
+            or ".切换 {target}",
+            switch_list_command=str(data.get("switch_list_command", ".切换")).strip() or ".切换",
+            switch_back_target=str(data.get("switch_back_target", "主魂")).strip() or "主魂",
+            switch_success_keywords=str(data.get("switch_success_keywords", "切换成功,神念已附着")).strip()
+            or "切换成功,神念已附着",
+            switch_back_success_keywords=str(
+                data.get("switch_back_success_keywords", "神念重归主魂肉身")
+            ).strip()
+            or "神念重归主魂肉身",
+            switch_failure_keywords=str(data.get("switch_failure_keywords", "未找到道号或ID")).strip()
+            or "未找到道号或ID",
+            status_command=str(data.get("status_command", ".状态")).strip() or ".状态",
+            status_identity_header_keyword=str(data.get("status_identity_header_keyword", "修士状态")).strip()
+            or "修士状态",
+        )
+        configured = config.with_identity(
+            account_id=str(data.get("account_id", config.account_id)).strip() or config.account_id,
+            account_name=str(data.get("account_name", config.account_name)).strip() or config.account_name,
+            state_db_path=str(data.get("state_db_path", config.state_db_path)).strip() or config.state_db_path,
+        )
+        if configured.identity_profiles:
+            return configured
+        return replace(
+            configured,
+            identity_profiles=configured._resolve_identity_profiles(),
+            active_identity_key=_MAIN_IDENTITY_KEY,
         )
 
     @staticmethod

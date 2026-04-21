@@ -136,6 +136,14 @@ class SQLiteStateStore:
         self._conn.execute("DELETE FROM plugin_state WHERE account_id = ?", (str(account_id),))
         self._conn.commit()
 
+    def delete_account_state_prefix(self, account_id_prefix: str) -> None:
+        prefix = str(account_id_prefix)
+        self._conn.execute(
+            "DELETE FROM plugin_state WHERE account_id = ? OR account_id LIKE ?",
+            (prefix, f"{prefix}:%"),
+        )
+        self._conn.commit()
+
     def close(self) -> None:
         if self._owns_connection:
             self._conn.close()

@@ -2,7 +2,7 @@ import logging
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from xiuxian_bot.config import Config
+from xiuxian_bot.config import Config, IdentityProfile
 from xiuxian_bot.core.contracts import MessageContext
 from xiuxian_bot.domain.text_normalizer import normalize_match_text
 from xiuxian_bot.domain.xinggong import parse_xinggong_observatory
@@ -72,6 +72,26 @@ def _dummy_config(
         xinggong_guanxing_preview_advance_seconds=xinggong_guanxing_preview_advance_seconds,
         xinggong_guanxing_shift_advance_seconds=xinggong_guanxing_shift_advance_seconds,
         xinggong_guanxing_watch_events=xinggong_guanxing_watch_events,
+        account_id="default",
+        account_name="default",
+        identity_profiles=(
+            IdentityProfile(
+                key="main",
+                kind="main",
+                my_name="Me",
+                switch_target="主魂",
+                display_name="主魂",
+            ),
+        ),
+        active_identity_key="main",
+        switch_command_template=".切换 {target}",
+        switch_list_command=".切换",
+        switch_back_target="主魂",
+        switch_success_keywords="切换成功,神念已附着",
+        switch_back_success_keywords="神念重归主魂肉身",
+        switch_failure_keywords="未找到道号或ID",
+        status_command=".状态",
+        status_identity_header_keyword="修士状态",
     )
 
 

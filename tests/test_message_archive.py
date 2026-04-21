@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from xiuxian_bot.config import Config, SystemConfig
+from xiuxian_bot.config import Config, IdentityProfile, SystemConfig
 from xiuxian_bot.core.account_repository import AccountRepository
 
 
@@ -75,6 +75,24 @@ def _dummy_config(**overrides) -> Config:
         lingxiaogong_poll_interval_seconds=300,
         account_id="default",
         account_name="default",
+        identity_profiles=(
+            IdentityProfile(
+                key="main",
+                kind="main",
+                my_name="Me",
+                switch_target="主魂",
+                display_name="主魂",
+            ),
+        ),
+        active_identity_key="main",
+        switch_command_template=".切换 {target}",
+        switch_list_command=".切换",
+        switch_back_target="主魂",
+        switch_success_keywords="切换成功,神念已附着",
+        switch_back_success_keywords="神念重归主魂肉身",
+        switch_failure_keywords="未找到道号或ID",
+        status_command=".状态",
+        status_identity_header_keyword="修士状态",
     )
     values.update(overrides)
     return Config(**values)
@@ -364,7 +382,8 @@ class TestRuntimeMessageArchive(unittest.IsolatedAsyncioTestCase):
         )
 
         class FakeAdapter:
-            def __init__(self, config, logger) -> None:  # type: ignore[no-untyped-def]
+            def __init__(self, config, logger, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                _ = kwargs
                 self.config = config
                 self.logger = logger
                 self.me_id = 1
@@ -491,7 +510,8 @@ class TestRuntimeMessageArchive(unittest.IsolatedAsyncioTestCase):
         )
 
         class FakeAdapter:
-            def __init__(self, config, logger) -> None:  # type: ignore[no-untyped-def]
+            def __init__(self, config, logger, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                _ = kwargs
                 self.config = config
                 self.logger = logger
                 self.me_id = 1

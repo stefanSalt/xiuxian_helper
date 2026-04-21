@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from xiuxian_bot.config import Config, SystemConfig
+from xiuxian_bot.config import Config, IdentityProfile, SystemConfig
 from xiuxian_bot.core.account_repository import AccountRepository
 from xiuxian_bot.core.contracts import MessageContext, SendAction
 from xiuxian_bot.core.state_store import SQLiteStateStore, serialize_datetime
@@ -71,6 +71,24 @@ def _dummy_config(**overrides) -> Config:
         chuangta_time="14:15",
         account_id="default",
         account_name="default",
+        identity_profiles=(
+            IdentityProfile(
+                key="main",
+                kind="main",
+                my_name="Me",
+                switch_target="主魂",
+                display_name="主魂",
+            ),
+        ),
+        active_identity_key="main",
+        switch_command_template=".切换 {target}",
+        switch_list_command=".切换",
+        switch_back_target="主魂",
+        switch_success_keywords="切换成功,神念已附着",
+        switch_back_success_keywords="神念重归主魂肉身",
+        switch_failure_keywords="未找到道号或ID",
+        status_command=".状态",
+        status_identity_header_keyword="修士状态",
     )
     values.update(overrides)
     return Config(**values)
@@ -85,6 +103,42 @@ HAS_WEB_DEPS = (
 
 
 class TestMultiAccountStorage(unittest.TestCase):
+    def test_account_repository_persists_identity_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "app.sqlite3"
+            logger = logging.getLogger("test")
+            repo = AccountRepository(str(path), logger)
+            config = _dummy_config(
+                my_name="寒山子",
+                identity_profiles=(
+                    IdentityProfile(
+                        key="main",
+                        kind="main",
+                        my_name="寒山子",
+                        switch_target="主魂",
+                        display_name="主魂",
+                        tg_username="salt9527",
+                    ),
+                    IdentityProfile(
+                        key="ruifengzi",
+                        kind="avatar",
+                        my_name="锐锋子",
+                        switch_target="锐锋子",
+                        display_name="锐锋子",
+                        game_id="7467781636",
+                        config_overrides={"enable_chuangta": True},
+                    ),
+                ),
+                active_identity_key="ruifengzi",
+            )
+
+            created = repo.create_account("alpha", config, enabled=True)
+
+            self.assertEqual(created.config.active_identity.key, "ruifengzi")
+            self.assertEqual(len(created.config.identities), 2)
+            self.assertEqual(created.config.identities[1].game_id, "7467781636")
+            repo.close()
+
     def test_state_store_is_isolated_by_account_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "state.sqlite3"
@@ -116,6 +170,9 @@ class TestMultiAccountStorage(unittest.TestCase):
             store = SQLiteStateStore(str(path), logger, account_id=str(created.id))
             store.save_state("xinggong", {"phase": "ready"})
             store.close()
+            identity_store = SQLiteStateStore(str(path), logger, account_id=f"{created.id}:main")
+            identity_store.save_state("xinggong", {"phase": "identity"})
+            identity_store.close()
 
             updated = repo.update_account(
                 created.id,
@@ -136,6 +193,9 @@ class TestMultiAccountStorage(unittest.TestCase):
             store = SQLiteStateStore(str(path), logger, account_id=str(created.id))
             self.assertEqual(store.load_state("xinggong"), {})
             store.close()
+            identity_store = SQLiteStateStore(str(path), logger, account_id=f"{created.id}:main")
+            self.assertEqual(identity_store.load_state("xinggong"), {})
+            identity_store.close()
             repo.close()
 
     def test_reconcile_config_change_clears_scheduled_state(self) -> None:
@@ -423,7 +483,8 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
                 return 1
 
         class FakeAdapter:
-            def __init__(self, config, logger) -> None:  # type: ignore[no-untyped-def]
+            def __init__(self, config, logger, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                _ = kwargs
                 self.config = config
                 self.logger = logger
                 self.me_id = 1
@@ -538,6 +599,173 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
 
             repo.close()
 
+    async def test_account_runner_switches_identity_before_sending_due_action(self) -> None:
+        from xiuxian_bot.runtime import AccountRunner
+
+        sends: list[tuple[str, str]] = []
+
+        class FakeScheduler:
+            def __init__(self, logger) -> None:  # type: ignore[no-untyped-def]
+                self.logger = logger
+
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                if "avatar:avatar.bootstrap" in key:
+                    await action()
+
+            async def cancel_all(self) -> None:
+                return None
+
+        class FakeAdapter:
+            def __init__(self, config, logger, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                _ = kwargs
+                self.config = config
+                self.logger = logger
+                self.me_id = 1
+                self._new_handler = None
+
+            def on_new_message(self, handler) -> None:  # type: ignore[no-untyped-def]
+                self._new_handler = handler
+
+            def on_message_edited(self, handler) -> None:  # type: ignore[no-untyped-def]
+                _ = handler
+
+            async def start(self) -> None:
+                return None
+
+            async def send_message(
+                self,
+                text: str,
+                *,
+                reply_to_topic: bool = True,
+                reply_to_msg_id: int | None = None,
+            ) -> int | None:
+                _ = (reply_to_topic, reply_to_msg_id)
+                sends.append(("adapter", text))
+                return 200 + len(sends)
+
+            async def build_context(self, event) -> MessageContext:  # type: ignore[no-untyped-def]
+                return event
+
+            async def run_forever(self) -> None:
+                await asyncio.sleep(0.05)
+
+            async def stop(self) -> None:
+                return None
+
+        class FakeSender:
+            def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                self.kwargs = kwargs
+
+            async def send(
+                self,
+                plugin: str,
+                text: str,
+                reply_to_topic: bool,
+                *,
+                reply_to_msg_id: int | None = None,
+            ) -> int | None:
+                _ = (reply_to_topic, reply_to_msg_id)
+                sends.append((plugin, text))
+                if text == ".切换 锐锋子":
+                    adapter = self.kwargs["send_message"].__self__
+                    assert adapter._new_handler is not None
+                    asyncio.create_task(
+                        adapter._new_handler(
+                            MessageContext(
+                                chat_id=-100,
+                                message_id=900,
+                                reply_to_msg_id=100 + len(sends),
+                                sender_id=999,
+                                text="切换成功！你的神念已附着在 【锐锋子】 之上。",
+                                ts=datetime.now(timezone.utc),
+                                is_reply=True,
+                                is_reply_to_me=True,
+                            )
+                        )
+                    )
+                return 100 + len(sends)
+
+        class MainPlugin:
+            name = "main"
+            enabled = True
+            priority = 10
+
+            def __init__(self, config, logger) -> None:  # type: ignore[no-untyped-def]
+                _ = (config, logger)
+
+            async def bootstrap(self, scheduler, send) -> None:  # type: ignore[no-untyped-def]
+                _ = (scheduler, send)
+
+            async def on_message(self, ctx: MessageContext):  # type: ignore[no-untyped-def]
+                _ = ctx
+                return None
+
+        class AvatarPlugin:
+            name = "avatar"
+            enabled = True
+            priority = 10
+
+            def __init__(self, config, logger) -> None:  # type: ignore[no-untyped-def]
+                self.config = config
+                self.logger = logger
+
+            async def bootstrap(self, scheduler, send) -> None:  # type: ignore[no-untyped-def]
+                await scheduler.schedule(
+                    key="avatar.bootstrap",
+                    delay_seconds=0.0,
+                    action=lambda: send("avatar", ".闯塔", True),
+                )
+
+            async def on_message(self, ctx: MessageContext):  # type: ignore[no-untyped-def]
+                _ = ctx
+                return None
+
+        def fake_build_plugins(config, logger):  # type: ignore[no-untyped-def]
+            if config.my_name == "锐锋子":
+                return [AvatarPlugin(config, logger)]
+            return [MainPlugin(config, logger)]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "app.sqlite3"
+            repo = AccountRepository(str(path), logging.getLogger("test"))
+            config = _dummy_config(
+                my_name="寒山子",
+                identity_profiles=(
+                    IdentityProfile(
+                        key="main",
+                        kind="main",
+                        my_name="寒山子",
+                        switch_target="主魂",
+                        display_name="主魂",
+                    ),
+                    IdentityProfile(
+                        key="avatar",
+                        kind="avatar",
+                        my_name="锐锋子",
+                        switch_target="锐锋子",
+                        display_name="锐锋子",
+                    ),
+                ),
+            )
+            record = repo.create_account("alpha", config, enabled=True)
+            system_config = SystemConfig(app_db_path=str(path), log_dir=str(Path(tmpdir) / "logs"))
+            runner = AccountRunner(record, system_config)
+
+            with patch("xiuxian_bot.runtime.Scheduler", FakeScheduler), patch(
+                "xiuxian_bot.runtime.ReliableSender",
+                FakeSender,
+            ), patch("xiuxian_bot.runtime.TGAdapter", FakeAdapter), patch(
+                "xiuxian_bot.runtime.build_plugins",
+                side_effect=fake_build_plugins,
+            ):
+                await runner.start()
+                await asyncio.sleep(0.08)
+                await runner.stop()
+
+            self.assertIn(("__identity__", ".切换 锐锋子"), sends)
+            self.assertIn(("avatar", ".闯塔"), sends)
+            repo.close()
+
 
 @unittest.skipUnless(HAS_WEB_DEPS, "requires fastapi/httpx/telethon dependencies")
 class TestWebApp(unittest.IsolatedAsyncioTestCase):
@@ -635,8 +863,17 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                                 "topic_id": "12345",
                                 "my_name": "BotOne",
                                 "system_reply_source_usernames": "hantianzunhl,other_source",
+                                "active_identity_key": "ruifengzi",
                                 "send_to_topic": "on",
                                 "enable_biguan": "on",
+                                "switch_command_template": ".切换 {target}",
+                                "switch_back_target": "主魂",
+                                "switch_success_keywords": "切换成功,神念已附着",
+                                "switch_back_success_keywords": "神念重归主魂肉身",
+                                "switch_failure_keywords": "未找到道号或ID",
+                                "status_command": ".状态",
+                                "status_identity_header_keyword": "修士状态",
+                                "identity_profiles_json": '[{"key":"main","kind":"main","my_name":"BotOne","switch_target":"主魂","display_name":"主魂","tg_username":"salt9527"},{"key":"ruifengzi","kind":"avatar","my_name":"锐锋子","switch_target":"锐锋子","display_name":"锐锋子","game_id":"7467781636","config_overrides":{"enable_chuangta":true}}]',
                                 "action_cmd_biguan": ".闭关修炼",
                                 "log_level": "INFO",
                                 "global_sends_per_minute": "6",
@@ -687,6 +924,7 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         dashboard = await client.get("/")
                         self.assertEqual(dashboard.status_code, 200)
                         self.assertIn("bot-1", dashboard.text)
+                        self.assertIn("锐锋子", dashboard.text)
 
                         edit_page = await client.get("/accounts/1/edit")
                         self.assertEqual(edit_page.status_code, 200)
@@ -694,6 +932,7 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         self.assertIn("凌霄宫", edit_page.text)
                         self.assertIn("自动引九天罡风", edit_page.text)
                         self.assertIn("额外系统来源", edit_page.text)
+                        self.assertIn("身份组 JSON", edit_page.text)
 
                         logs_page = await client.get("/accounts/1/logs")
                         self.assertEqual(logs_page.status_code, 200)

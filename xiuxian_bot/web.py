@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -48,6 +49,11 @@ CHECKBOX_FIELDS = {
     "enable_lingxiaogong_dengtianjie",
 }
 
+_IDENTITY_JSON_HELP = (
+    '[{"key":"main","kind":"main","my_name":"寒山子","switch_target":"主魂","display_name":"主魂","tg_username":"salt9527"},'
+    '{"key":"ruifengzi","kind":"avatar","my_name":"锐锋子","switch_target":"锐锋子","display_name":"锐锋子","game_id":"7467781636","config_overrides":{"enable_chuangta":true}}]'
+)
+
 FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
     (
         "账号基础",
@@ -60,9 +66,23 @@ FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
             {"name": "topic_id", "label": "话题 TOPIC_ID", "type": "number"},
             {"name": "my_name", "label": "游戏名 / @名", "type": "text"},
             {"name": "system_reply_source_usernames", "label": "额外系统来源(username逗号分隔)", "type": "text"},
+            {"name": "active_identity_key", "label": "当前激活身份 key", "type": "text"},
             {"name": "send_to_topic", "label": "发送到指定话题", "type": "checkbox"},
             {"name": "enabled", "label": "保存后自动启用", "type": "checkbox"},
             {"name": "dry_run", "label": "Dry Run", "type": "checkbox"},
+        ],
+    ),
+    (
+        "主魂 / 化身",
+        [
+            {"name": "switch_command_template", "label": "切换命令模板", "type": "text"},
+            {"name": "switch_back_target", "label": "主魂切回目标", "type": "text"},
+            {"name": "switch_success_keywords", "label": "切换成功关键词", "type": "text"},
+            {"name": "switch_back_success_keywords", "label": "切回主魂成功关键词", "type": "text"},
+            {"name": "switch_failure_keywords", "label": "切换失败关键词", "type": "text"},
+            {"name": "status_command", "label": "状态命令", "type": "text"},
+            {"name": "status_identity_header_keyword", "label": "状态头关键词", "type": "text"},
+            {"name": "identity_profiles_json", "label": "身份组 JSON", "type": "text"},
         ],
     ),
     (
@@ -169,9 +189,18 @@ def _template_values_for_new(system_config: SystemConfig) -> dict[str, Any]:
         "topic_id": "",
         "my_name": "",
         "system_reply_source_usernames": "hantianzunhl",
+        "active_identity_key": "main",
         "send_to_topic": True,
         "enabled": True,
         "dry_run": False,
+        "switch_command_template": ".切换 {target}",
+        "switch_back_target": "主魂",
+        "switch_success_keywords": "切换成功,神念已附着",
+        "switch_back_success_keywords": "神念重归主魂肉身",
+        "switch_failure_keywords": "未找到道号或ID",
+        "status_command": ".状态",
+        "status_identity_header_keyword": "修士状态",
+        "identity_profiles_json": _IDENTITY_JSON_HELP,
         "log_level": system_config.log_level,
         "global_sends_per_minute": 6,
         "plugin_sends_per_minute": 3,
@@ -229,6 +258,10 @@ def _template_values_for_account(record) -> dict[str, Any]:
     values = record.config.to_dict()
     values["name"] = record.name
     values["enabled"] = record.enabled
+    values["identity_profiles_json"] = json.dumps(
+        [profile.to_dict() for profile in record.config.identities],
+        ensure_ascii=False,
+    )
     for key, value in list(values.items()):
         if value is None:
             values[key] = ""
@@ -246,11 +279,35 @@ def _build_config_from_form(form, system_config: SystemConfig) -> tuple[str, boo
                 raw[name] = (form.get(name) or "").strip()
     name = (form.get("name") or "").strip()
     enabled = "enabled" in form
+    raw_identity_profiles = (form.get("identity_profiles_json") or "").strip()
+    identity_profiles = json.loads(raw_identity_profiles) if raw_identity_profiles else []
+    if identity_profiles and not isinstance(identity_profiles, list):
+        raise ValueError("身份组 JSON 必须是数组")
     raw["state_db_path"] = system_config.app_db_path
     raw["account_name"] = name or system_config.default_account_name
     raw["account_id"] = ""
+    raw["identity_profiles"] = identity_profiles
     config = Config.from_mapping(raw)
     return name, enabled, config
+
+
+def _identity_label_map(records, db_path: str, logger: logging.Logger | None) -> dict[int, str]:
+    labels: dict[int, str] = {}
+    for record in records:
+        state_store = SQLiteStateStore(
+            db_path,
+            logger,
+            account_id=f"{record.id}::__identity__",
+        )
+        try:
+            active_key = str(
+                state_store.load_state("__identity_runtime__").get("active_identity_key", "")
+            ).strip()
+        finally:
+            state_store.close()
+        identity = record.config.identity_by_key(active_key) or record.config.active_identity
+        labels[record.id] = identity.label
+    return labels
 
 
 def _drop_state_keys(state_store: SQLiteStateStore, plugin: str, keys: set[str]) -> bool:
@@ -267,6 +324,27 @@ def _drop_state_keys(state_store: SQLiteStateStore, plugin: str, keys: set[str])
     return changed
 
 
+def _iter_runtime_state_stores(
+    *,
+    db_path: str,
+    account_id: int,
+    config: Config,
+    logger: logging.Logger | None,
+) -> list[SQLiteStateStore]:
+    stores = [
+        SQLiteStateStore(db_path, logger, account_id=str(account_id)),
+    ]
+    for identity in config.identities:
+        stores.append(
+            SQLiteStateStore(
+                db_path,
+                logger,
+                account_id=f"{account_id}:{identity.key}",
+            )
+        )
+    return stores
+
+
 def _reconcile_runtime_state_for_config_change(
     *,
     db_path: str,
@@ -275,63 +353,70 @@ def _reconcile_runtime_state_for_config_change(
     current_config: Config,
     logger: logging.Logger | None,
 ) -> None:
-    state_store = SQLiteStateStore(db_path, logger, account_id=str(account_id))
+    state_stores = _iter_runtime_state_stores(
+        db_path=db_path,
+        account_id=account_id,
+        config=current_config,
+        logger=logger,
+    )
     try:
-        if (
-            previous_config.garden_poll_interval_seconds != current_config.garden_poll_interval_seconds
-            or previous_config.garden_action_spacing_seconds != current_config.garden_action_spacing_seconds
-        ):
-            _drop_state_keys(state_store, "garden", {"next_poll_at"})
+        for state_store in state_stores:
+            if (
+                previous_config.garden_poll_interval_seconds != current_config.garden_poll_interval_seconds
+                or previous_config.garden_action_spacing_seconds != current_config.garden_action_spacing_seconds
+            ):
+                _drop_state_keys(state_store, "garden", {"next_poll_at"})
 
-        if (
-            previous_config.xinggong_poll_interval_seconds != current_config.xinggong_poll_interval_seconds
-            or previous_config.xinggong_action_spacing_seconds != current_config.xinggong_action_spacing_seconds
-        ):
-            _drop_state_keys(state_store, "xinggong", {"next_poll_at"})
+            if (
+                previous_config.xinggong_poll_interval_seconds != current_config.xinggong_poll_interval_seconds
+                or previous_config.xinggong_action_spacing_seconds != current_config.xinggong_action_spacing_seconds
+            ):
+                _drop_state_keys(state_store, "xinggong", {"next_poll_at"})
 
-        if (
-            previous_config.enable_xinggong_wenan != current_config.enable_xinggong_wenan
-            or previous_config.xinggong_wenan_interval_seconds
-            != current_config.xinggong_wenan_interval_seconds
-        ):
-            _drop_state_keys(state_store, "xinggong", {"wenan_next_at"})
+            if (
+                previous_config.enable_xinggong_wenan != current_config.enable_xinggong_wenan
+                or previous_config.xinggong_wenan_interval_seconds
+                != current_config.xinggong_wenan_interval_seconds
+            ):
+                _drop_state_keys(state_store, "xinggong", {"wenan_next_at"})
 
-        if (
-            previous_config.yuanying_liefeng_interval_seconds
-            != current_config.yuanying_liefeng_interval_seconds
-            or previous_config.enable_yuanying_liefeng != current_config.enable_yuanying_liefeng
-        ):
-            state = state_store.load_state("yuanying")
-            if state:
-                source = state.get("liefeng_block_source")
-                escape_pause_active = bool(state.get("escape_pause_active", False))
-                if not escape_pause_active and source not in {"cooldown", "weakness"}:
-                    _drop_state_keys(
-                        state_store,
-                        "yuanying",
-                        {"liefeng_blocked_until", "liefeng_block_source"},
-                    )
+            if (
+                previous_config.yuanying_liefeng_interval_seconds
+                != current_config.yuanying_liefeng_interval_seconds
+                or previous_config.enable_yuanying_liefeng != current_config.enable_yuanying_liefeng
+            ):
+                state = state_store.load_state("yuanying")
+                if state:
+                    source = state.get("liefeng_block_source")
+                    escape_pause_active = bool(state.get("escape_pause_active", False))
+                    if not escape_pause_active and source not in {"cooldown", "weakness"}:
+                        _drop_state_keys(
+                            state_store,
+                            "yuanying",
+                            {"liefeng_blocked_until", "liefeng_block_source"},
+                        )
 
-        if (
-            previous_config.enable_lingxiaogong != current_config.enable_lingxiaogong
-            or previous_config.enable_lingxiaogong_wenxintai
-            != current_config.enable_lingxiaogong_wenxintai
-            or previous_config.enable_lingxiaogong_jiutian
-            != current_config.enable_lingxiaogong_jiutian
-            or previous_config.enable_lingxiaogong_dengtianjie
-            != current_config.enable_lingxiaogong_dengtianjie
-            or previous_config.lingxiaogong_poll_interval_seconds
-            != current_config.lingxiaogong_poll_interval_seconds
-            or previous_config.lingxiaogong_wenxintai_after_climb_count
-            != current_config.lingxiaogong_wenxintai_after_climb_count
-        ):
-            _drop_state_keys(
-                state_store,
-                "lingxiaogong",
-                {"next_status_at", "next_climb_at", "next_jiutian_at"},
-            )
+            if (
+                previous_config.enable_lingxiaogong != current_config.enable_lingxiaogong
+                or previous_config.enable_lingxiaogong_wenxintai
+                != current_config.enable_lingxiaogong_wenxintai
+                or previous_config.enable_lingxiaogong_jiutian
+                != current_config.enable_lingxiaogong_jiutian
+                or previous_config.enable_lingxiaogong_dengtianjie
+                != current_config.enable_lingxiaogong_dengtianjie
+                or previous_config.lingxiaogong_poll_interval_seconds
+                != current_config.lingxiaogong_poll_interval_seconds
+                or previous_config.lingxiaogong_wenxintai_after_climb_count
+                != current_config.lingxiaogong_wenxintai_after_climb_count
+            ):
+                _drop_state_keys(
+                    state_store,
+                    "lingxiaogong",
+                    {"next_status_at", "next_climb_at", "next_jiutian_at"},
+                )
     finally:
-        state_store.close()
+        for state_store in state_stores:
+            state_store.close()
 
 
 def _auth_token(system_config: SystemConfig) -> str:
@@ -555,12 +640,19 @@ def create_app() -> FastAPI:
             return _redirect_login()
         repository: AccountRepository = request.app.state.repository
         manager: RunnerManager = request.app.state.runner_manager
+        logger: logging.Logger = request.app.state.logger
         accounts = repository.list_accounts()
         snapshots = manager.snapshots()
+        active_identity_labels = _identity_label_map(accounts, system_config.app_db_path, logger)
         return templates.TemplateResponse(
             request,
             "dashboard.html",
-            _ctx(request, accounts=accounts, snapshots=snapshots),
+            _ctx(
+                request,
+                accounts=accounts,
+                snapshots=snapshots,
+                active_identity_labels=active_identity_labels,
+            ),
         )
 
     def _message_filters_from_request(request: Request, *, fixed_account_id: int | None = None) -> dict[str, Any]:

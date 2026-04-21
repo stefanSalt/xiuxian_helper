@@ -17,6 +17,7 @@
         <th>启用</th>
         <th>运行状态</th>
         <th>游戏名</th>
+        <th>激活身份</th>
         <th>会话</th>
         <th>操作</th>
       </tr>
@@ -33,6 +34,12 @@
           {% if snapshot and snapshot.message %}<div class="muted">{{ snapshot.message }}</div>{% endif %}
         </td>
         <td>{{ account.config.my_name }}</td>
+        <td>
+          {{ active_identity_labels.get(account.id, account.config.active_identity.label if account.config.active_identity else '-') }}
+          {% if account.config.identities|length > 1 %}
+          <div class="muted">{{ account.config.identities|length }} 个身份</div>
+          {% endif %}
+        </td>
         <td>{{ account.config.tg_session_name }}</td>
         <td>
           <div class="actions">

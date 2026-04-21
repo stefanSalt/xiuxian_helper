@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from xiuxian_bot.config import Config
+from xiuxian_bot.config import Config, IdentityProfile
 from xiuxian_bot.core.state_store import SQLiteStateStore, serialize_datetime, serialize_date
 from xiuxian_bot.plugins.biguan import AutoBiguanPlugin
 from xiuxian_bot.plugins.chuangta import AutoChuangtaPlugin
@@ -76,6 +76,26 @@ def _dummy_config(**overrides) -> Config:
         enable_lingxiaogong_dengtianjie=True,
         lingxiaogong_poll_interval_seconds=300,
         lingxiaogong_wenxintai_after_climb_count=4,
+        account_id="default",
+        account_name="default",
+        identity_profiles=(
+            IdentityProfile(
+                key="main",
+                kind="main",
+                my_name="Me",
+                switch_target="主魂",
+                display_name="主魂",
+            ),
+        ),
+        active_identity_key="main",
+        switch_command_template=".切换 {target}",
+        switch_list_command=".切换",
+        switch_back_target="主魂",
+        switch_success_keywords="切换成功,神念已附着",
+        switch_back_success_keywords="神念重归主魂肉身",
+        switch_failure_keywords="未找到道号或ID",
+        status_command=".状态",
+        status_identity_header_keyword="修士状态",
     )
     values.update(overrides)
     return Config(**values)
