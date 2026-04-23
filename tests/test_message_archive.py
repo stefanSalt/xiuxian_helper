@@ -127,6 +127,7 @@ class TestMessageArchiveRepository(unittest.TestCase):
                     reply_to_msg_id=900,
                     sender_id=777,
                     sender_name="tester",
+                    identity_key=None,
                     raw_text="星 盘 显 化",
                     event_type="new",
                     message_ts=ts,
@@ -143,6 +144,7 @@ class TestMessageArchiveRepository(unittest.TestCase):
                     reply_to_msg_id=900,
                     sender_id=777,
                     sender_name="tester",
+                    identity_key=None,
                     raw_text="星盘显化 已编辑",
                     event_type="edit",
                     message_ts=ts,
@@ -185,6 +187,7 @@ class TestMessageArchiveRepository(unittest.TestCase):
                         reply_to_msg_id=900,
                         sender_id=777,
                         sender_name="tester",
+                        identity_key=None,
                         raw_text=f"msg-{message_id}",
                         event_type="new",
                         message_ts=fixed_now,
@@ -254,6 +257,7 @@ class TestMessageArchiveRepository(unittest.TestCase):
                         reply_to_msg_id=900,
                         sender_id=777,
                         sender_name="tester",
+                        identity_key=None,
                         raw_text=f"msg-{message_id}",
                         event_type="new",
                         message_ts=fixed_now,
@@ -291,6 +295,62 @@ class TestMessageArchiveRepository(unittest.TestCase):
             self.assertEqual(result.after_count, 2)
             remaining = {row.message_id for row in repo.search_messages(account_id=1, limit=10)}
             self.assertEqual(remaining, {3001, 3003})
+            repo.close()
+
+    def test_archive_message_auto_migrates_identity_key_column(self) -> None:
+        from xiuxian_bot.core.message_archive_repository import (
+            MessageArchiveInput,
+            MessageArchiveRepository,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "app.sqlite3"
+            conn = sqlite3.connect(str(path))
+            conn.execute(
+                """
+                CREATE TABLE message_archive (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id INTEGER NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    topic_id INTEGER,
+                    message_id INTEGER NOT NULL,
+                    reply_to_msg_id INTEGER,
+                    sender_id INTEGER,
+                    sender_name TEXT,
+                    raw_text TEXT NOT NULL,
+                    normalized_text TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    message_ts TEXT NOT NULL,
+                    captured_at TEXT NOT NULL,
+                    edit_version INTEGER NOT NULL,
+                    is_reply INTEGER NOT NULL DEFAULT 0,
+                    is_topic_message INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            repo = MessageArchiveRepository(str(path), logging.getLogger("test"))
+            repo.archive_message(
+                MessageArchiveInput(
+                    account_id=1,
+                    chat_id=-100,
+                    topic_id=900,
+                    message_id=4001,
+                    reply_to_msg_id=900,
+                    sender_id=777,
+                    sender_name="tester",
+                    identity_key="avatar",
+                    raw_text=".引九天罡风",
+                    event_type="new",
+                    message_ts=datetime.now(timezone.utc),
+                    is_reply=False,
+                    is_topic_message=True,
+                )
+            )
+            rows = repo.search_messages(account_id=1)
+            self.assertEqual(rows[0].identity_key, "avatar")
             repo.close()
 
 
@@ -362,8 +422,9 @@ class TestRuntimeMessageArchive(unittest.IsolatedAsyncioTestCase):
                 reply_to_topic: bool,
                 *,
                 reply_to_msg_id: int | None = None,
+                identity_key: str | None = None,
             ) -> int | None:
-                _ = (plugin, text, reply_to_topic, reply_to_msg_id)
+                _ = (plugin, text, reply_to_topic, reply_to_msg_id, identity_key)
                 return 1
 
         event = SimpleNamespace(
@@ -481,8 +542,9 @@ class TestRuntimeMessageArchive(unittest.IsolatedAsyncioTestCase):
                 reply_to_topic: bool,
                 *,
                 reply_to_msg_id: int | None = None,
+                identity_key: str | None = None,
             ) -> int | None:
-                _ = (plugin, text, reply_to_topic, reply_to_msg_id)
+                _ = (plugin, text, reply_to_topic, reply_to_msg_id, identity_key)
                 return 1
 
         event = SimpleNamespace(
@@ -670,6 +732,7 @@ class TestWebMessageArchive(unittest.IsolatedAsyncioTestCase):
                             reply_to_msg_id=900,
                             sender_id=111,
                             sender_name="tester",
+                            identity_key="main",
                             raw_text="全局检索目标",
                             event_type="new",
                             message_ts=now,
@@ -686,6 +749,7 @@ class TestWebMessageArchive(unittest.IsolatedAsyncioTestCase):
                             reply_to_msg_id=901,
                             sender_id=222,
                             sender_name="tester2",
+                            identity_key=None,
                             raw_text="其他消息",
                             event_type="new",
                             message_ts=now,
@@ -723,6 +787,7 @@ class TestWebMessageArchive(unittest.IsolatedAsyncioTestCase):
                             self.assertEqual(global_page.status_code, 200)
                             self.assertIn("消息归档", global_page.text)
                             self.assertIn("全局检索目标", global_page.text)
+                            self.assertIn("身份：主魂", global_page.text)
                             self.assertNotIn("其他消息", global_page.text)
                             self.assertIn("总条数：2", global_page.text)
                             self.assertIn("今日新增：1", global_page.text)
@@ -773,6 +838,7 @@ class TestWebMessageArchive(unittest.IsolatedAsyncioTestCase):
                     reply_to_msg_id=900,
                     sender_id=111,
                     sender_name="tester",
+                    identity_key=None,
                     raw_text="保留消息",
                     event_type="new",
                     message_ts=now,
@@ -789,6 +855,7 @@ class TestWebMessageArchive(unittest.IsolatedAsyncioTestCase):
                     reply_to_msg_id=900,
                     sender_id=111,
                     sender_name="tester",
+                    identity_key=None,
                     raw_text="过期消息",
                     event_type="new",
                     message_ts=now,

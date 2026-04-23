@@ -21,6 +21,7 @@ class MessageArchiveInput:
     reply_to_msg_id: int | None
     sender_id: int | None
     sender_name: str | None
+    identity_key: str | None
     raw_text: str
     event_type: str
     message_ts: datetime
@@ -38,6 +39,7 @@ class MessageArchiveRecord:
     reply_to_msg_id: int | None
     sender_id: int | None
     sender_name: str | None
+    identity_key: str | None
     raw_text: str
     normalized_text: str
     event_type: str
@@ -86,6 +88,7 @@ class MessageArchiveRepository:
                 reply_to_msg_id INTEGER,
                 sender_id INTEGER,
                 sender_name TEXT,
+                identity_key TEXT,
                 raw_text TEXT NOT NULL,
                 normalized_text TEXT NOT NULL,
                 event_type TEXT NOT NULL,
@@ -97,6 +100,7 @@ class MessageArchiveRepository:
             )
             """
         )
+        self._ensure_column("message_archive", "identity_key", "TEXT")
         self._conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_message_archive_lookup
@@ -147,6 +151,7 @@ class MessageArchiveRepository:
                 reply_to_msg_id,
                 sender_id,
                 sender_name,
+                identity_key,
                 raw_text,
                 normalized_text,
                 event_type,
@@ -156,7 +161,7 @@ class MessageArchiveRepository:
                 is_reply,
                 is_topic_message
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(payload.account_id),
@@ -166,6 +171,7 @@ class MessageArchiveRepository:
                 int(payload.reply_to_msg_id) if payload.reply_to_msg_id is not None else None,
                 int(payload.sender_id) if payload.sender_id is not None else None,
                 (payload.sender_name or "").strip() or None,
+                (payload.identity_key or "").strip() or None,
                 payload.raw_text,
                 normalized_text,
                 payload.event_type.strip(),
@@ -380,6 +386,7 @@ class MessageArchiveRepository:
                 reply_to_msg_id,
                 sender_id,
                 sender_name,
+                identity_key,
                 raw_text,
                 normalized_text,
                 event_type,
@@ -406,6 +413,7 @@ class MessageArchiveRepository:
             reply_to_msg_id=int(row["reply_to_msg_id"]) if row["reply_to_msg_id"] is not None else None,
             sender_id=int(row["sender_id"]) if row["sender_id"] is not None else None,
             sender_name=row["sender_name"],
+            identity_key=row["identity_key"],
             raw_text=row["raw_text"],
             normalized_text=row["normalized_text"],
             event_type=row["event_type"],
@@ -421,3 +429,13 @@ class MessageArchiveRepository:
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc).isoformat(timespec="seconds")
         return value.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+    def _ensure_column(self, table: str, column: str, definition: str) -> None:
+        row = self._conn.execute(
+            f"SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?",
+            (column,),
+        ).fetchone()
+        if row is not None:
+            return
+        self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        self._conn.commit()

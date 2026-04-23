@@ -219,6 +219,12 @@ class _IdentityRuntime:
     yuanying: object | None
 
 
+@dataclass(frozen=True)
+class _SentMessageBinding:
+    identity_key: str
+    plugin: str
+
+
 class _ScopedScheduler:
     def __init__(self, scheduler: Scheduler, scope: str) -> None:
         self._scheduler = scheduler
@@ -360,7 +366,7 @@ class AccountRunner:
                     clear_runtime_pause(clear_progress=True)
 
         recent_sent_ids: deque[int] = deque(maxlen=50)
-        recent_sent_set: set[int] = set()
+        recent_sent_bindings: dict[int, _SentMessageBinding] = {}
         pause_mode_active = False
 
         def _active_runtime() -> _IdentityRuntime:
@@ -380,14 +386,22 @@ class AccountRunner:
             result = pause_reason()
             return result if isinstance(result, str) and result else None
 
-        def _remember_sent(mid: int | None) -> None:
-            if mid is None or mid in recent_sent_set:
+        def _remember_sent(mid: int | None, *, identity_key: str, plugin: str) -> None:
+            if mid is None:
+                return
+            if mid in recent_sent_bindings:
+                recent_sent_bindings[mid] = _SentMessageBinding(identity_key=identity_key, plugin=plugin)
                 return
             if len(recent_sent_ids) == recent_sent_ids.maxlen:
                 old = recent_sent_ids.popleft()
-                recent_sent_set.discard(old)
+                recent_sent_bindings.pop(old, None)
             recent_sent_ids.append(mid)
-            recent_sent_set.add(mid)
+            recent_sent_bindings[mid] = _SentMessageBinding(identity_key=identity_key, plugin=plugin)
+
+        def _binding_for_message_id(message_id: int | None) -> _SentMessageBinding | None:
+            if message_id is None:
+                return None
+            return recent_sent_bindings.get(message_id)
 
         async def _enter_pause_mode(reason: str) -> None:
             nonlocal pause_mode_active
@@ -435,8 +449,9 @@ class AccountRunner:
                 text,
                 bool(reply_to_topic and runtime.config.send_to_topic),
                 reply_to_msg_id=reply_to_msg_id,
+                identity_key=target_key,
             )
-            _remember_sent(mid)
+            _remember_sent(mid, identity_key=target_key, plugin=plugin)
             return mid
 
         async def _execute_action(action, *, identity_key: str) -> None:
@@ -480,6 +495,11 @@ class AccountRunner:
             archive_text = _build_archivable_text(event, ctx.text)
             if not _should_archive_message(archive_text, topic_id):
                 return
+            identity_key: str | None = None
+            if adapter.me_id is not None and ctx.sender_id == adapter.me_id:
+                binding = _binding_for_message_id(ctx.message_id)
+                if binding is not None:
+                    identity_key = binding.identity_key
             try:
                 message_archive_repository.archive_message(
                     MessageArchiveInput(
@@ -490,6 +510,7 @@ class AccountRunner:
                         reply_to_msg_id=ctx.reply_to_msg_id,
                         sender_id=ctx.sender_id,
                         sender_name=_extract_sender_name_from_event(event),
+                        identity_key=identity_key,
                         raw_text=archive_text,
                         event_type=event_type,
                         message_ts=ctx.ts,
@@ -522,6 +543,11 @@ class AccountRunner:
             return matched
 
         def _runtime_for_context(ctx) -> _IdentityRuntime:
+            binding = _binding_for_message_id(ctx.reply_to_msg_id)
+            if binding is not None:
+                runtime = runtimes.get(binding.identity_key)
+                if runtime is not None:
+                    return runtime
             matched = _identify_runtime_from_text(ctx.text)
             if matched is not None:
                 return matched
@@ -537,7 +563,7 @@ class AccountRunner:
             if adapter.me_id is not None and ctx.sender_id != adapter.me_id:
                 interesting = (
                     ctx.is_reply_to_me
-                    or (ctx.reply_to_msg_id in recent_sent_set)
+                    or (ctx.reply_to_msg_id in recent_sent_bindings)
                     or any(name and name in ctx.text for name in base_config.all_identity_mentions)
                     or ("周天星斗大阵" in ctx.text)
                     or ("观星台" in ctx.text)

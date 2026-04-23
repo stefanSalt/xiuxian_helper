@@ -813,6 +813,11 @@ def create_app() -> FastAPI:
         )
         accounts = repository.list_accounts()
         account_lookup = {item.id: item for item in accounts}
+        identity_lookup = {
+            f"{item.id}:{identity.key}": identity.label
+            for item in accounts
+            for identity in item.config.identities
+        }
         prev_url = _build_page_url(request, filters["page"] - 1) if filters["page"] > 1 else None
         next_url = _build_page_url(request, filters["page"] + 1) if offset + len(records) < total else None
         storage_size_label = _format_bytes(_sqlite_storage_bytes(archive_repository.path))
@@ -825,6 +830,7 @@ def create_app() -> FastAPI:
                 account=account,
                 accounts=accounts,
                 account_lookup=account_lookup,
+                identity_lookup=identity_lookup,
                 records=records,
                 total=total,
                 page=filters["page"],

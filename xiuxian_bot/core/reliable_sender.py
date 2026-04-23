@@ -57,12 +57,14 @@ class ReliableSender:
         reply_to_topic: bool,
         *,
         reply_to_msg_id: int | None = None,
+        identity_key: str | None = None,
     ) -> int | None:
+        identity_prefix = f"[{identity_key}] " if identity_key else ""
         if self._dry_run:
             if reply_to_msg_id is None:
-                self._logger.info(">> %s (dry-run)", text)
+                self._logger.info(">> %s%s (dry-run)", identity_prefix, text)
             else:
-                self._logger.info(">> %s (reply_to=%s, dry-run)", text, reply_to_msg_id)
+                self._logger.info(">> %s%s (reply_to=%s, dry-run)", identity_prefix, text, reply_to_msg_id)
             return None
 
         async with self._lock:
@@ -114,8 +116,9 @@ class ReliableSender:
                         )
                     else:
                         self._logger.exception(
-                            "send_failed_retry plugin=%s retry=%s wait_seconds=%.1f text=%s reply_to_topic=%s reply_to_msg_id=%s",
+                            "send_failed_retry plugin=%s identity=%s retry=%s wait_seconds=%.1f text=%s reply_to_topic=%s reply_to_msg_id=%s",
                             plugin,
+                            identity_key,
                             send_retries,
                             wait_seconds,
                             text,
@@ -126,7 +129,7 @@ class ReliableSender:
                     continue
 
                 if reply_to_msg_id is None:
-                    self._logger.info(">> %s", text)
+                    self._logger.info(">> %s%s", identity_prefix, text)
                 else:
-                    self._logger.info(">> %s (reply_to=%s)", text, reply_to_msg_id)
+                    self._logger.info(">> %s%s (reply_to=%s)", identity_prefix, text, reply_to_msg_id)
                 return mid

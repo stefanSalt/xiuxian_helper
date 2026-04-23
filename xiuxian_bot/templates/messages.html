@@ -102,6 +102,9 @@
           <td>
             {% if row.sender_name %}{{ row.sender_name }}{% endif %}
             {% if row.sender_id %}<div class="muted">{{ row.sender_id }}</div>{% endif %}
+            {% if row.identity_key %}
+            <div class="muted">身份：{{ identity_lookup.get(row.account_id ~ ':' ~ row.identity_key, row.identity_key) }}</div>
+            {% endif %}
           </td>
           <td>{{ row.message_ts }}</td>
           <td>{{ row.captured_at }}</td>
