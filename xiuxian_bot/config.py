@@ -307,6 +307,7 @@ class Config:
     zongmen_action_spacing_seconds: int
 
     # Xinggong sub-features
+    enable_message_archive: bool = True
     enable_xinggong_wenan: bool = True
     enable_xinggong_deep_biguan: bool = False
     enable_xinggong_guanxing: bool = False
@@ -469,6 +470,10 @@ class Config:
             send_to_topic=_parse_bool(data.get("send_to_topic", False), "send_to_topic"),
             action_cmd_biguan=str(data.get("action_cmd_biguan", ".闭关修炼")).strip() or ".闭关修炼",
             dry_run=_parse_bool(data.get("dry_run", False), "dry_run"),
+            enable_message_archive=_parse_bool(
+                data.get("enable_message_archive", True),
+                "enable_message_archive",
+            ),
             log_level=str(data.get("log_level", "INFO")).strip().upper() or "INFO",
             global_sends_per_minute=_parse_int(
                 data.get("global_sends_per_minute", 6), "global_sends_per_minute"
@@ -685,6 +690,7 @@ class Config:
             "send_to_topic": _get_env_bool("SEND_TO_TOPIC", default=False),
             "action_cmd_biguan": _get_env_str("ACTION_CMD_BIGUAN", default=".闭关修炼"),
             "dry_run": _get_env_bool("DRY_RUN", default=False),
+            "enable_message_archive": _get_env_bool("ENABLE_MESSAGE_ARCHIVE", default=True),
             "log_level": _get_env_str("LOG_LEVEL", default="INFO").upper(),
             "global_sends_per_minute": _get_env_int("GLOBAL_SENDS_PER_MINUTE", default=6),
             "plugin_sends_per_minute": _get_env_int("PLUGIN_SENDS_PER_MINUTE", default=3),

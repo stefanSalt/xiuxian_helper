@@ -1227,6 +1227,7 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                                 "system_reply_source_usernames": "hantianzunhl,other_source",
                                 "active_identity_key": "ruifengzi",
                                 "send_to_topic": "on",
+                                "enable_message_archive": "on",
                                 "enable_biguan": "on",
                                 "switch_command_template": ".切换 {target}",
                                 "switch_back_target": "主魂",
@@ -1307,6 +1308,7 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         self.assertIn("凌霄宫", edit_page.text)
                         self.assertIn("自动引九天罡风", edit_page.text)
                         self.assertIn("额外系统来源", edit_page.text)
+                        self.assertIn("消息归档", edit_page.text)
                         self.assertIn("身份配置", edit_page.text)
                         self.assertIn("新增化身", edit_page.text)
                         self.assertNotIn("身份组 JSON", edit_page.text)
@@ -1314,6 +1316,7 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         stored = app.state.repository.get_account(1)
                         self.assertIsNotNone(stored)
                         assert stored is not None
+                        self.assertTrue(stored.config.enable_message_archive)
                         self.assertEqual(stored.config.active_identity_key, "ruifengzi")
                         avatar = stored.config.identity_by_key("ruifengzi")
                         self.assertIsNotNone(avatar)

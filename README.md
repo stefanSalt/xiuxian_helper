@@ -121,6 +121,8 @@ http://127.0.0.1:8000
 
 消息归档存放在 `APP_DB_PATH` 对应 sqlite 的 `message_archive` 表中。
 
+每个账号可在网页账号配置中单独开启 / 关闭“消息归档”。该开关只跟随 TG 账号配置，不区分主魂与化身；关闭后不会删除旧归档，只是不再新增记录。
+
 当前支持系统级保留配置：
 - `MESSAGE_ARCHIVE_CLEANUP_ENABLED`：是否启用自动清理，默认 `1`
 - `MESSAGE_ARCHIVE_RETENTION_DAYS`：保留最近多少天，默认 `30`

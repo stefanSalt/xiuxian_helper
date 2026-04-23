@@ -31,6 +31,7 @@ _MESSAGE_ARCHIVE_MAINTENANCE_INTERVAL_SECONDS = 24 * 60 * 60
 CHECKBOX_FIELDS = {
     "send_to_topic",
     "dry_run",
+    "enable_message_archive",
     "enable_biguan",
     "enable_daily",
     "enable_garden",
@@ -75,6 +76,7 @@ FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
             {"name": "send_to_topic", "label": "发送到指定话题", "type": "checkbox"},
             {"name": "enabled", "label": "保存后自动启用", "type": "checkbox"},
             {"name": "dry_run", "label": "Dry Run", "type": "checkbox"},
+            {"name": "enable_message_archive", "label": "消息归档", "type": "checkbox"},
         ],
     ),
     (
@@ -197,6 +199,7 @@ def _template_values_for_new(system_config: SystemConfig) -> dict[str, Any]:
         "send_to_topic": True,
         "enabled": True,
         "dry_run": False,
+        "enable_message_archive": True,
         "switch_command_template": ".切换 {target}",
         "switch_back_target": "主魂",
         "switch_success_keywords": "切换成功,神念已附着",

@@ -60,6 +60,35 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config.identities[0].key, "main")
         self.assertEqual(config.identities[0].my_name, "寒山子")
 
+    def test_from_mapping_accepts_message_archive_toggle_default_enabled(self) -> None:
+        config = Config.from_mapping(
+            {
+                "tg_api_id": "1",
+                "tg_api_hash": "hash",
+                "tg_session_name": "session",
+                "game_chat_id": "-100",
+                "topic_id": "123",
+                "my_name": "Me",
+            }
+        )
+
+        self.assertTrue(config.enable_message_archive)
+
+    def test_from_mapping_accepts_message_archive_toggle_disabled(self) -> None:
+        config = Config.from_mapping(
+            {
+                "tg_api_id": "1",
+                "tg_api_hash": "hash",
+                "tg_session_name": "session",
+                "game_chat_id": "-100",
+                "topic_id": "123",
+                "my_name": "Me",
+                "enable_message_archive": "false",
+            }
+        )
+
+        self.assertFalse(config.enable_message_archive)
+
     def test_from_mapping_accepts_lingxiaogong_fields(self) -> None:
         config = Config.from_mapping(
             {

@@ -491,6 +491,8 @@ class AccountRunner:
             )
 
         async def _archive_message_event(event, ctx, event_type: str) -> None:
+            if not base_config.enable_message_archive:
+                return
             topic_id = _extract_topic_id_from_event(event)
             archive_text = _build_archivable_text(event, ctx.text)
             if not _should_archive_message(archive_text, topic_id):
