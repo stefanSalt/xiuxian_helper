@@ -69,6 +69,14 @@ def _dummy_config(**overrides) -> Config:
         state_db_path="xiuxian_app.sqlite3",
         enable_chuangta=False,
         chuangta_time="14:15",
+        enable_lingxiaogong=False,
+        enable_lingxiaogong_wenxintai=True,
+        enable_lingxiaogong_jiutian=True,
+        enable_lingxiaogong_dengtianjie=True,
+        lingxiaogong_poll_interval_seconds=300,
+        lingxiaogong_wenxintai_after_climb_count=4,
+        enable_random_event_nanlonghou=True,
+        random_event_nanlonghou_action=".交换 功法",
         account_id="default",
         account_name="default",
         identity_profiles=(
@@ -1153,6 +1161,131 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(("__identity__", ".切换 主魂"), sends)
             repo.close()
 
+    async def test_account_runner_sends_action_as_reply_to_message(self) -> None:
+        from xiuxian_bot.runtime import AccountRunner
+
+        sends: list[tuple[str, str, int | None]] = []
+        stop_event = asyncio.Event()
+
+        class FakeScheduler:
+            def __init__(self, logger) -> None:  # type: ignore[no-untyped-def]
+                self.logger = logger
+
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                _ = (key, delay_seconds, action)
+                return None
+
+            async def cancel_all(self) -> None:
+                return None
+
+        class FakeAdapter:
+            def __init__(self, config, logger, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                _ = kwargs
+                self.config = config
+                self.logger = logger
+                self.me_id = 1
+                self._new_handler = None
+
+            def on_new_message(self, handler) -> None:  # type: ignore[no-untyped-def]
+                self._new_handler = handler
+
+            def on_message_edited(self, handler) -> None:  # type: ignore[no-untyped-def]
+                _ = handler
+
+            async def start(self) -> None:
+                return None
+
+            async def send_message(
+                self,
+                text: str,
+                *,
+                reply_to_topic: bool = True,
+                reply_to_msg_id: int | None = None,
+            ) -> int | None:
+                _ = (text, reply_to_topic, reply_to_msg_id)
+                return 5001
+
+            async def build_context(self, event) -> MessageContext:  # type: ignore[no-untyped-def]
+                return event
+
+            async def run_forever(self) -> None:
+                assert self._new_handler is not None
+                await self._new_handler(
+                    MessageContext(
+                        chat_id=-100,
+                        message_id=4321,
+                        reply_to_msg_id=None,
+                        sender_id=999,
+                        text=(
+                            "@Me！你感到一股无法抗拒的威压降临洞府！南陇侯的身影竟直接出现在你面前。\n"
+                            "你有 10分钟 内做出抉择：\n"
+                            "1. 回复本消息 .交换 法宝\n"
+                            "2. 回复本消息 .交换 功法\n"
+                            "3. 回复本消息 .拒绝交易"
+                        ),
+                        ts=datetime.now(timezone.utc),
+                        is_reply=False,
+                        is_reply_to_me=False,
+                    )
+                )
+                await stop_event.wait()
+
+            async def stop(self) -> None:
+                stop_event.set()
+
+        class FakeSender:
+            def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                self.kwargs = kwargs
+
+            async def send(
+                self,
+                plugin: str,
+                text: str,
+                reply_to_topic: bool,
+                *,
+                reply_to_msg_id: int | None = None,
+                identity_key: str | None = None,
+            ) -> int | None:
+                _ = (reply_to_topic, identity_key)
+                sends.append((plugin, text, reply_to_msg_id))
+                return 5000 + len(sends)
+
+        class ReplyPlugin:
+            name = "reply"
+            enabled = True
+            priority = 10
+
+            async def on_message(self, ctx: MessageContext):  # type: ignore[no-untyped-def]
+                return [
+                    SendAction(
+                        plugin=self.name,
+                        text=".交换 功法",
+                        reply_to_topic=True,
+                        reply_to_msg_id=ctx.message_id,
+                    )
+                ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "app.sqlite3"
+            repo = AccountRepository(str(path), logging.getLogger("test"))
+            record = repo.create_account("alpha", _dummy_config(account_name="alpha"), enabled=True)
+            system_config = SystemConfig(app_db_path=str(path), log_dir=str(Path(tmpdir) / "logs"))
+            runner = AccountRunner(record, system_config)
+
+            with patch("xiuxian_bot.runtime.Scheduler", FakeScheduler), patch(
+                "xiuxian_bot.runtime.ReliableSender",
+                FakeSender,
+            ), patch("xiuxian_bot.runtime.TGAdapter", FakeAdapter), patch(
+                "xiuxian_bot.runtime.build_plugins",
+                return_value=[ReplyPlugin()],
+            ):
+                await runner.start()
+                await asyncio.sleep(0.05)
+                await runner.stop()
+
+            self.assertEqual(sends, [("reply", ".交换 功法", 4321)])
+            repo.close()
+
     async def test_account_runner_binds_reply_to_sending_identity_instead_of_active_identity(self) -> None:
         from xiuxian_bot.runtime import AccountRunner
 
@@ -1673,6 +1806,8 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                                 "enable_lingxiaogong_dengtianjie": "on",
                                 "lingxiaogong_poll_interval_seconds": "300",
                                 "lingxiaogong_wenxintai_after_climb_count": "4",
+                                "enable_random_event_nanlonghou": "on",
+                                "random_event_nanlonghou_action": ".交换 功法",
                                 "zongmen_cmd_dianmao": ".宗门点卯",
                                 "zongmen_dianmao_time": "",
                                 "zongmen_cmd_chuangong": ".宗门传功",

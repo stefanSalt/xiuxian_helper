@@ -78,6 +78,8 @@ def _dummy_config(
         enable_lingxiaogong_dengtianjie=enable_lingxiaogong_dengtianjie,
         lingxiaogong_poll_interval_seconds=lingxiaogong_poll_interval_seconds,
         lingxiaogong_wenxintai_after_climb_count=lingxiaogong_wenxintai_after_climb_count,
+        enable_random_event_nanlonghou=True,
+        random_event_nanlonghou_action=".交换 功法",
     )
 
 

@@ -76,6 +76,8 @@ def _dummy_config(**overrides) -> Config:
         enable_lingxiaogong_dengtianjie=True,
         lingxiaogong_poll_interval_seconds=300,
         lingxiaogong_wenxintai_after_climb_count=4,
+        enable_random_event_nanlonghou=True,
+        random_event_nanlonghou_action=".交换 功法",
         account_id="default",
         account_name="default",
         identity_profiles=(
@@ -94,6 +96,8 @@ def _dummy_config(**overrides) -> Config:
         switch_success_keywords="切换成功,神念已附着",
         switch_back_success_keywords="神念重归主魂肉身",
         switch_failure_keywords="未找到道号或ID",
+        auto_return_main_after_avatar_action=True,
+        auto_return_main_delay_seconds=120,
         status_command=".状态",
         status_identity_header_keyword="修士状态",
     )

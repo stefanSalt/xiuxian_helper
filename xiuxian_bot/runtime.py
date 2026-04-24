@@ -21,6 +21,7 @@ from .plugins.chuangta import AutoChuangtaPlugin
 from .plugins.daily import DailyPlugin
 from .plugins.garden import AutoGardenPlugin
 from .plugins.lingxiaogong import AutoLingxiaogongPlugin
+from .plugins.random_event import AutoRandomEventPlugin
 from .plugins.xinggong import AutoXinggongPlugin
 from .plugins.yuanying import AutoYuanyingPlugin
 from .plugins.zongmen import AutoZongmenPlugin
@@ -202,6 +203,7 @@ def build_plugins(config: Config, logger: logging.Logger) -> list[object]:
         AutoGardenPlugin(config, logger),
         AutoChuangtaPlugin(config, logger),
         AutoLingxiaogongPlugin(config, logger),
+        AutoRandomEventPlugin(config, logger),
         AutoXinggongPlugin(config, logger),
         AutoYuanyingPlugin(config, logger),
         AutoZongmenPlugin(config, logger),
@@ -496,6 +498,7 @@ class AccountRunner:
                         action.plugin,
                         action.text,
                         action.reply_to_topic,
+                        reply_to_msg_id=action.reply_to_msg_id,
                         identity_key=identity_key,
                     )
 
@@ -509,6 +512,7 @@ class AccountRunner:
                 action.plugin,
                 action.text,
                 action.reply_to_topic,
+                reply_to_msg_id=action.reply_to_msg_id,
                 identity_key=identity_key,
             )
 

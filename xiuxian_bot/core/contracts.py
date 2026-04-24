@@ -28,6 +28,7 @@ class SendAction:
     plugin: str
     text: str
     reply_to_topic: bool = True
+    reply_to_msg_id: int | None = None
     delay_seconds: float = 0.0
     key: str | None = None
 

@@ -48,6 +48,7 @@ CHECKBOX_FIELDS = {
     "enable_lingxiaogong_wenxintai",
     "enable_lingxiaogong_jiutian",
     "enable_lingxiaogong_dengtianjie",
+    "enable_random_event_nanlonghou",
     "auto_return_main_after_avatar_action",
 }
 
@@ -58,6 +59,7 @@ IDENTITY_OVERRIDE_FIELDS: tuple[dict[str, str], ...] = (
     {"name": "enable_yuanying", "label": "元婴"},
     {"name": "enable_chuangta", "label": "闯塔"},
     {"name": "enable_lingxiaogong", "label": "凌霄宫"},
+    {"name": "enable_random_event_nanlonghou", "label": "随机事件·南陇侯"},
     {"name": "enable_zongmen", "label": "宗门"},
 )
 
@@ -113,6 +115,7 @@ FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
             {"name": "enable_yuanying", "label": "元婴", "type": "checkbox"},
             {"name": "enable_chuangta", "label": "闯塔", "type": "checkbox"},
             {"name": "enable_lingxiaogong", "label": "凌霄宫", "type": "checkbox"},
+            {"name": "enable_random_event_nanlonghou", "label": "随机事件·南陇侯", "type": "checkbox"},
             {"name": "enable_zongmen", "label": "宗门", "type": "checkbox"},
         ],
     ),
@@ -167,6 +170,12 @@ FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
             {"name": "enable_lingxiaogong_dengtianjie", "label": "自动登天阶", "type": "checkbox"},
             {"name": "lingxiaogong_poll_interval_seconds", "label": "状态轮询间隔(秒)", "type": "number"},
             {"name": "lingxiaogong_wenxintai_after_climb_count", "label": "第几次登天阶后问心", "type": "number"},
+        ],
+    ),
+    (
+        "随机事件",
+        [
+            {"name": "random_event_nanlonghou_action", "label": "南陇侯响应指令", "type": "text"},
         ],
     ),
     (
@@ -267,6 +276,8 @@ def _template_values_for_new(system_config: SystemConfig) -> dict[str, Any]:
         "enable_lingxiaogong_dengtianjie": True,
         "lingxiaogong_poll_interval_seconds": 300,
         "lingxiaogong_wenxintai_after_climb_count": 4,
+        "enable_random_event_nanlonghou": True,
+        "random_event_nanlonghou_action": ".交换 功法",
         "zongmen_cmd_dianmao": ".宗门点卯",
         "zongmen_cmd_chuangong": ".宗门传功",
         "zongmen_dianmao_time": "",

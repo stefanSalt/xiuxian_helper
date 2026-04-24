@@ -334,6 +334,8 @@ class Config:
     enable_lingxiaogong_dengtianjie: bool = True
     lingxiaogong_poll_interval_seconds: int = 300
     lingxiaogong_wenxintai_after_climb_count: int = 4
+    enable_random_event_nanlonghou: bool = True
+    random_event_nanlonghou_action: str = ".交换 功法"
     system_reply_source_usernames: str = "hantianzunhl"
 
     # Identity / multi-account metadata
@@ -629,6 +631,14 @@ class Config:
                 data.get("lingxiaogong_wenxintai_after_climb_count", 4),
                 "lingxiaogong_wenxintai_after_climb_count",
             ),
+            enable_random_event_nanlonghou=_parse_bool(
+                data.get("enable_random_event_nanlonghou", True),
+                "enable_random_event_nanlonghou",
+            ),
+            random_event_nanlonghou_action=str(
+                data.get("random_event_nanlonghou_action", ".交换 功法")
+            ).strip()
+            or ".交换 功法",
             system_reply_source_usernames=str(
                 data.get("system_reply_source_usernames", "hantianzunhl")
             ).strip()
@@ -824,6 +834,14 @@ class Config:
             "lingxiaogong_wenxintai_after_climb_count": _get_env_int(
                 "LINGXIAOGONG_WENXINTAI_AFTER_CLIMB_COUNT",
                 default=4,
+            ),
+            "enable_random_event_nanlonghou": _get_env_bool(
+                "ENABLE_RANDOM_EVENT_NANLONGHOU",
+                default=True,
+            ),
+            "random_event_nanlonghou_action": _get_env_str(
+                "RANDOM_EVENT_NANLONGHOU_ACTION",
+                default=".交换 功法",
             ),
             "system_reply_source_usernames": _get_env_str(
                 "SYSTEM_REPLY_SOURCE_USERNAMES",
