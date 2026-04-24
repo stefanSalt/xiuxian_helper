@@ -49,6 +49,7 @@ CHECKBOX_FIELDS = {
     "enable_lingxiaogong_jiutian",
     "enable_lingxiaogong_dengtianjie",
     "enable_random_event_nanlonghou",
+    "enable_random_event_jiyin",
     "auto_return_main_after_avatar_action",
 }
 
@@ -60,6 +61,7 @@ IDENTITY_OVERRIDE_FIELDS: tuple[dict[str, str], ...] = (
     {"name": "enable_chuangta", "label": "闯塔"},
     {"name": "enable_lingxiaogong", "label": "凌霄宫"},
     {"name": "enable_random_event_nanlonghou", "label": "随机事件·南陇侯"},
+    {"name": "enable_random_event_jiyin", "label": "随机事件·极阴祖师"},
     {"name": "enable_zongmen", "label": "宗门"},
 )
 
@@ -116,6 +118,7 @@ FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
             {"name": "enable_chuangta", "label": "闯塔", "type": "checkbox"},
             {"name": "enable_lingxiaogong", "label": "凌霄宫", "type": "checkbox"},
             {"name": "enable_random_event_nanlonghou", "label": "随机事件·南陇侯", "type": "checkbox"},
+            {"name": "enable_random_event_jiyin", "label": "随机事件·极阴祖师", "type": "checkbox"},
             {"name": "enable_zongmen", "label": "宗门", "type": "checkbox"},
         ],
     ),
@@ -176,6 +179,7 @@ FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
         "随机事件",
         [
             {"name": "random_event_nanlonghou_action", "label": "南陇侯响应指令", "type": "text"},
+            {"name": "random_event_jiyin_action", "label": "极阴祖师响应指令", "type": "text"},
         ],
     ),
     (
@@ -278,6 +282,8 @@ def _template_values_for_new(system_config: SystemConfig) -> dict[str, Any]:
         "lingxiaogong_wenxintai_after_climb_count": 4,
         "enable_random_event_nanlonghou": True,
         "random_event_nanlonghou_action": ".交换 功法",
+        "enable_random_event_jiyin": True,
+        "random_event_jiyin_action": ".献上魂魄",
         "zongmen_cmd_dianmao": ".宗门点卯",
         "zongmen_cmd_chuangong": ".宗门传功",
         "zongmen_dianmao_time": "",

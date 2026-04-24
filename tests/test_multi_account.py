@@ -77,6 +77,8 @@ def _dummy_config(**overrides) -> Config:
         lingxiaogong_wenxintai_after_climb_count=4,
         enable_random_event_nanlonghou=True,
         random_event_nanlonghou_action=".交换 功法",
+        enable_random_event_jiyin=True,
+        random_event_jiyin_action=".献上魂魄",
         account_id="default",
         account_name="default",
         identity_profiles=(
@@ -1808,6 +1810,8 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                                 "lingxiaogong_wenxintai_after_climb_count": "4",
                                 "enable_random_event_nanlonghou": "on",
                                 "random_event_nanlonghou_action": ".交换 功法",
+                                "enable_random_event_jiyin": "on",
+                                "random_event_jiyin_action": ".献上魂魄",
                                 "zongmen_cmd_dianmao": ".宗门点卯",
                                 "zongmen_dianmao_time": "",
                                 "zongmen_cmd_chuangong": ".宗门传功",

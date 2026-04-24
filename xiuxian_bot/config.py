@@ -336,6 +336,8 @@ class Config:
     lingxiaogong_wenxintai_after_climb_count: int = 4
     enable_random_event_nanlonghou: bool = True
     random_event_nanlonghou_action: str = ".交换 功法"
+    enable_random_event_jiyin: bool = True
+    random_event_jiyin_action: str = ".献上魂魄"
     system_reply_source_usernames: str = "hantianzunhl"
 
     # Identity / multi-account metadata
@@ -639,6 +641,14 @@ class Config:
                 data.get("random_event_nanlonghou_action", ".交换 功法")
             ).strip()
             or ".交换 功法",
+            enable_random_event_jiyin=_parse_bool(
+                data.get("enable_random_event_jiyin", True),
+                "enable_random_event_jiyin",
+            ),
+            random_event_jiyin_action=str(
+                data.get("random_event_jiyin_action", ".献上魂魄")
+            ).strip()
+            or ".献上魂魄",
             system_reply_source_usernames=str(
                 data.get("system_reply_source_usernames", "hantianzunhl")
             ).strip()
@@ -842,6 +852,14 @@ class Config:
             "random_event_nanlonghou_action": _get_env_str(
                 "RANDOM_EVENT_NANLONGHOU_ACTION",
                 default=".交换 功法",
+            ),
+            "enable_random_event_jiyin": _get_env_bool(
+                "ENABLE_RANDOM_EVENT_JIYIN",
+                default=True,
+            ),
+            "random_event_jiyin_action": _get_env_str(
+                "RANDOM_EVENT_JIYIN_ACTION",
+                default=".献上魂魄",
             ),
             "system_reply_source_usernames": _get_env_str(
                 "SYSTEM_REPLY_SOURCE_USERNAMES",

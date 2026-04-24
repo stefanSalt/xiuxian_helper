@@ -71,6 +71,8 @@ def _dummy_config(**overrides) -> Config:
         lingxiaogong_wenxintai_after_climb_count=4,
         enable_random_event_nanlonghou=True,
         random_event_nanlonghou_action=".交换 功法",
+        enable_random_event_jiyin=True,
+        random_event_jiyin_action=".献上魂魄",
         account_id="default",
         account_name="default",
         identity_profiles=(
@@ -118,6 +120,14 @@ CHOICE_TEXT = """@fanrenthree！你感到一股无法抗拒的威压降临洞府
 1. 回复本消息 .交换 法宝
 2. 回复本消息 .交换 功法
 3. 回复本消息 .拒绝交易
+"""
+
+JIYIN_CHOICE_TEXT = """@fanrenthree！你感到一股无法抗拒的意志锁定了你的神魂！
+一个沙哑的声音在你脑海中响起：“小辈，让老夫看看你的成色...”
+
+你必须在 180 分钟 内做出抉择：
+1. 回复本消息 .献上魂魄 (高风险，高回报)
+2. 回复本消息 .收敛气息 (低风险，低回报)
 """
 
 
@@ -168,6 +178,56 @@ class TestRandomEventPlugin(unittest.IsolatedAsyncioTestCase):
                     switch_target="fanrenthree",
                     display_name="fanrenthree",
                     config_overrides={"enable_random_event_nanlonghou": False},
+                ),
+            ),
+            active_identity_key="avatar",
+        )
+        plugin = AutoRandomEventPlugin(base.apply_identity("avatar"), logging.getLogger("test"))
+
+        self.assertTrue(plugin.enabled)
+        actions = await plugin.on_message(_ctx(CHOICE_TEXT))
+        self.assertIsNone(actions)
+
+    async def test_jiyin_choice_replies_to_choice_message(self) -> None:
+        plugin = AutoRandomEventPlugin(_dummy_config(), logging.getLogger("test"))
+
+        actions = await plugin.on_message(_ctx(JIYIN_CHOICE_TEXT, message_id=654))
+
+        self.assertIsNotNone(actions)
+        assert actions is not None
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].plugin, "random_event")
+        self.assertEqual(actions[0].text, ".献上魂魄")
+        self.assertEqual(actions[0].reply_to_msg_id, 654)
+
+    async def test_jiyin_ignores_other_identity(self) -> None:
+        plugin = AutoRandomEventPlugin(_dummy_config(), logging.getLogger("test"))
+        text = JIYIN_CHOICE_TEXT.replace("@fanrenthree", "@otheruser")
+
+        actions = await plugin.on_message(_ctx(text))
+
+        self.assertIsNone(actions)
+
+    async def test_jiyin_can_be_disabled_by_identity_override(self) -> None:
+        base = _dummy_config(
+            identity_profiles=(
+                IdentityProfile(
+                    key="main",
+                    kind="main",
+                    my_name="fanrenthree",
+                    switch_target="主魂",
+                    display_name="主魂",
+                ),
+                IdentityProfile(
+                    key="avatar",
+                    kind="avatar",
+                    my_name="fanrenthree",
+                    switch_target="fanrenthree",
+                    display_name="fanrenthree",
+                    config_overrides={
+                        "enable_random_event_nanlonghou": False,
+                        "enable_random_event_jiyin": False,
+                    },
                 ),
             ),
             active_identity_key="avatar",

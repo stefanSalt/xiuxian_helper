@@ -78,6 +78,8 @@ def _dummy_config(**overrides) -> Config:
         lingxiaogong_wenxintai_after_climb_count=4,
         enable_random_event_nanlonghou=True,
         random_event_nanlonghou_action=".交换 功法",
+        enable_random_event_jiyin=True,
+        random_event_jiyin_action=".献上魂魄",
         account_id="default",
         account_name="default",
         identity_profiles=(

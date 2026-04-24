@@ -80,6 +80,8 @@ def _dummy_config(
         lingxiaogong_wenxintai_after_climb_count=lingxiaogong_wenxintai_after_climb_count,
         enable_random_event_nanlonghou=True,
         random_event_nanlonghou_action=".交换 功法",
+        enable_random_event_jiyin=True,
+        random_event_jiyin_action=".献上魂魄",
     )
 
 
