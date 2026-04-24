@@ -48,6 +48,7 @@ CHECKBOX_FIELDS = {
     "enable_lingxiaogong_wenxintai",
     "enable_lingxiaogong_jiutian",
     "enable_lingxiaogong_dengtianjie",
+    "auto_return_main_after_avatar_action",
 }
 
 IDENTITY_OVERRIDE_FIELDS: tuple[dict[str, str], ...] = (
@@ -87,6 +88,8 @@ FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
             {"name": "switch_success_keywords", "label": "切换成功关键词", "type": "text"},
             {"name": "switch_back_success_keywords", "label": "切回主魂成功关键词", "type": "text"},
             {"name": "switch_failure_keywords", "label": "切换失败关键词", "type": "text"},
+            {"name": "auto_return_main_after_avatar_action", "label": "分身动作后自动切回主魂", "type": "checkbox"},
+            {"name": "auto_return_main_delay_seconds", "label": "自动切回主魂延迟(秒)", "type": "number"},
             {"name": "status_command", "label": "状态命令", "type": "text"},
             {"name": "status_identity_header_keyword", "label": "状态头关键词", "type": "text"},
         ],
@@ -205,6 +208,8 @@ def _template_values_for_new(system_config: SystemConfig) -> dict[str, Any]:
         "switch_success_keywords": "切换成功,神念已附着",
         "switch_back_success_keywords": "神念重归主魂肉身",
         "switch_failure_keywords": "未找到道号或ID",
+        "auto_return_main_after_avatar_action": True,
+        "auto_return_main_delay_seconds": 120,
         "status_command": ".状态",
         "status_identity_header_keyword": "修士状态",
         "identity_profiles": [

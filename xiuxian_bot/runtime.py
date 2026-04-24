@@ -452,6 +452,28 @@ class AccountRunner:
                 identity_key=target_key,
             )
             _remember_sent(mid, identity_key=target_key, plugin=plugin)
+            if (
+                mid is not None
+                and target_key != "main"
+                and base_config.auto_return_main_after_avatar_action
+                and base_config.identity_by_key("main") is not None
+            ):
+                async def _return_main() -> None:
+                    if identity_switch.active_identity_key != target_key:
+                        return
+                    if not await identity_switch.ensure_identity("main"):
+                        self._logger.warning(
+                            "identity_return_main_failed from=%s plugin=%s text=%s",
+                            target_key,
+                            plugin,
+                            text,
+                        )
+
+                await scheduler.schedule(
+                    key="__identity__:return_main",
+                    delay_seconds=float(base_config.auto_return_main_delay_seconds),
+                    action=_return_main,
+                )
             return mid
 
         async def _execute_action(action, *, identity_key: str) -> None:

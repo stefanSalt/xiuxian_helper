@@ -87,6 +87,8 @@ def _dummy_config(**overrides) -> Config:
         switch_success_keywords="切换成功,神念已附着",
         switch_back_success_keywords="神念重归主魂肉身",
         switch_failure_keywords="未找到道号或ID",
+        auto_return_main_after_avatar_action=True,
+        auto_return_main_delay_seconds=120,
         status_command=".状态",
         status_identity_header_keyword="修士状态",
     )
@@ -603,6 +605,395 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
         from xiuxian_bot.runtime import AccountRunner
 
         sends: list[tuple[str, str]] = []
+        scheduled_return_main: list[tuple[float, object]] = []
+        stop_event = asyncio.Event()
+
+        class FakeScheduler:
+            def __init__(self, logger) -> None:  # type: ignore[no-untyped-def]
+                self.logger = logger
+
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                if "avatar:avatar.bootstrap" in key:
+                    await action()
+                elif key == "__identity__:return_main":
+                    scheduled_return_main.append((delay_seconds, action))
+
+            async def cancel_all(self) -> None:
+                return None
+
+        class FakeAdapter:
+            def __init__(self, config, logger, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                _ = kwargs
+                self.config = config
+                self.logger = logger
+                self.me_id = 1
+                self._new_handler = None
+
+            def on_new_message(self, handler) -> None:  # type: ignore[no-untyped-def]
+                self._new_handler = handler
+
+            def on_message_edited(self, handler) -> None:  # type: ignore[no-untyped-def]
+                _ = handler
+
+            async def start(self) -> None:
+                return None
+
+            async def send_message(
+                self,
+                text: str,
+                *,
+                reply_to_topic: bool = True,
+                reply_to_msg_id: int | None = None,
+            ) -> int | None:
+                _ = (reply_to_topic, reply_to_msg_id)
+                sends.append(("adapter", text))
+                return 200 + len(sends)
+
+            async def build_context(self, event) -> MessageContext:  # type: ignore[no-untyped-def]
+                return event
+
+            async def run_forever(self) -> None:
+                await stop_event.wait()
+
+            async def stop(self) -> None:
+                stop_event.set()
+                return None
+
+        class FakeSender:
+            def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                self.kwargs = kwargs
+
+            async def send(
+                self,
+                plugin: str,
+                text: str,
+                reply_to_topic: bool,
+                *,
+                reply_to_msg_id: int | None = None,
+                identity_key: str | None = None,
+            ) -> int | None:
+                _ = (reply_to_topic, reply_to_msg_id, identity_key)
+                sends.append((plugin, text))
+                if text == ".切换 锐锋子":
+                    adapter = self.kwargs["send_message"].__self__
+                    assert adapter._new_handler is not None
+                    asyncio.create_task(
+                        adapter._new_handler(
+                            MessageContext(
+                                chat_id=-100,
+                                message_id=900,
+                                reply_to_msg_id=100 + len(sends),
+                                sender_id=999,
+                                text="切换成功！你的神念已附着在 【锐锋子】 之上。",
+                                ts=datetime.now(timezone.utc),
+                                is_reply=True,
+                                is_reply_to_me=True,
+                            )
+                        )
+                    )
+                elif text == ".切换 主魂":
+                    adapter = self.kwargs["send_message"].__self__
+                    assert adapter._new_handler is not None
+                    asyncio.create_task(
+                        adapter._new_handler(
+                            MessageContext(
+                                chat_id=-100,
+                                message_id=901,
+                                reply_to_msg_id=100 + len(sends),
+                                sender_id=999,
+                                text="你已收回神通，神念重归主魂肉身。",
+                                ts=datetime.now(timezone.utc),
+                                is_reply=True,
+                                is_reply_to_me=True,
+                            )
+                        )
+                    )
+                return 100 + len(sends)
+
+        class MainPlugin:
+            name = "main"
+            enabled = True
+            priority = 10
+
+            def __init__(self, config, logger) -> None:  # type: ignore[no-untyped-def]
+                _ = (config, logger)
+
+            async def bootstrap(self, scheduler, send) -> None:  # type: ignore[no-untyped-def]
+                _ = (scheduler, send)
+
+            async def on_message(self, ctx: MessageContext):  # type: ignore[no-untyped-def]
+                _ = ctx
+                return None
+
+        class AvatarPlugin:
+            name = "avatar"
+            enabled = True
+            priority = 10
+
+            def __init__(self, config, logger) -> None:  # type: ignore[no-untyped-def]
+                self.config = config
+                self.logger = logger
+
+            async def bootstrap(self, scheduler, send) -> None:  # type: ignore[no-untyped-def]
+                await scheduler.schedule(
+                    key="avatar.bootstrap",
+                    delay_seconds=0.0,
+                    action=lambda: send("avatar", ".闯塔", True),
+                )
+
+            async def on_message(self, ctx: MessageContext):  # type: ignore[no-untyped-def]
+                _ = ctx
+                return None
+
+        def fake_build_plugins(config, logger):  # type: ignore[no-untyped-def]
+            if config.my_name == "锐锋子":
+                return [AvatarPlugin(config, logger)]
+            return [MainPlugin(config, logger)]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "app.sqlite3"
+            repo = AccountRepository(str(path), logging.getLogger("test"))
+            config = _dummy_config(
+                my_name="寒山子",
+                auto_return_main_delay_seconds=120,
+                identity_profiles=(
+                    IdentityProfile(
+                        key="main",
+                        kind="main",
+                        my_name="寒山子",
+                        switch_target="主魂",
+                        display_name="主魂",
+                    ),
+                    IdentityProfile(
+                        key="avatar",
+                        kind="avatar",
+                        my_name="锐锋子",
+                        switch_target="锐锋子",
+                        display_name="锐锋子",
+                    ),
+                ),
+            )
+            record = repo.create_account("alpha", config, enabled=True)
+            system_config = SystemConfig(app_db_path=str(path), log_dir=str(Path(tmpdir) / "logs"))
+            runner = AccountRunner(record, system_config)
+
+            with patch("xiuxian_bot.runtime.Scheduler", FakeScheduler), patch(
+                "xiuxian_bot.runtime.ReliableSender",
+                FakeSender,
+            ), patch("xiuxian_bot.runtime.TGAdapter", FakeAdapter), patch(
+                "xiuxian_bot.runtime.build_plugins",
+                side_effect=fake_build_plugins,
+            ):
+                await runner.start()
+                await asyncio.sleep(0.08)
+                self.assertIn(("__identity__", ".切换 锐锋子"), sends)
+                self.assertIn(("avatar", ".闯塔"), sends)
+                self.assertNotIn(("__identity__", ".切换 主魂"), sends)
+                self.assertEqual(len(scheduled_return_main), 1)
+                self.assertEqual(scheduled_return_main[0][0], 120.0)
+                await scheduled_return_main[0][1]()
+                self.assertIn(("__identity__", ".切换 主魂"), sends)
+                await runner.stop()
+
+            repo.close()
+
+    async def test_account_runner_refreshes_delayed_return_main_after_avatar_actions(self) -> None:
+        from xiuxian_bot.runtime import AccountRunner
+
+        sends: list[tuple[str, str]] = []
+        scheduled_return_main: list[tuple[float, object]] = []
+        stop_event = asyncio.Event()
+
+        class FakeScheduler:
+            def __init__(self, logger) -> None:  # type: ignore[no-untyped-def]
+                self.logger = logger
+
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                if "avatar:avatar.bootstrap" in key:
+                    await action()
+                elif key == "__identity__:return_main":
+                    scheduled_return_main.append((delay_seconds, action))
+
+            async def cancel_all(self) -> None:
+                return None
+
+        class FakeAdapter:
+            def __init__(self, config, logger, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                _ = kwargs
+                self.config = config
+                self.logger = logger
+                self.me_id = 1
+                self._new_handler = None
+
+            def on_new_message(self, handler) -> None:  # type: ignore[no-untyped-def]
+                self._new_handler = handler
+
+            def on_message_edited(self, handler) -> None:  # type: ignore[no-untyped-def]
+                _ = handler
+
+            async def start(self) -> None:
+                return None
+
+            async def send_message(
+                self,
+                text: str,
+                *,
+                reply_to_topic: bool = True,
+                reply_to_msg_id: int | None = None,
+            ) -> int | None:
+                _ = (reply_to_topic, reply_to_msg_id)
+                sends.append(("adapter", text))
+                return 200 + len(sends)
+
+            async def build_context(self, event) -> MessageContext:  # type: ignore[no-untyped-def]
+                return event
+
+            async def run_forever(self) -> None:
+                await stop_event.wait()
+
+            async def stop(self) -> None:
+                stop_event.set()
+                return None
+
+        class FakeSender:
+            def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                self.kwargs = kwargs
+
+            async def send(
+                self,
+                plugin: str,
+                text: str,
+                reply_to_topic: bool,
+                *,
+                reply_to_msg_id: int | None = None,
+                identity_key: str | None = None,
+            ) -> int | None:
+                _ = (reply_to_topic, reply_to_msg_id, identity_key)
+                sends.append((plugin, text))
+                if text == ".切换 锐锋子":
+                    adapter = self.kwargs["send_message"].__self__
+                    assert adapter._new_handler is not None
+                    asyncio.create_task(
+                        adapter._new_handler(
+                            MessageContext(
+                                chat_id=-100,
+                                message_id=900,
+                                reply_to_msg_id=100 + len(sends),
+                                sender_id=999,
+                                text="切换成功！你的神念已附着在 【锐锋子】 之上。",
+                                ts=datetime.now(timezone.utc),
+                                is_reply=True,
+                                is_reply_to_me=True,
+                            )
+                        )
+                    )
+                elif text == ".切换 主魂":
+                    adapter = self.kwargs["send_message"].__self__
+                    assert adapter._new_handler is not None
+                    asyncio.create_task(
+                        adapter._new_handler(
+                            MessageContext(
+                                chat_id=-100,
+                                message_id=901,
+                                reply_to_msg_id=100 + len(sends),
+                                sender_id=999,
+                                text="你已收回神通，神念重归主魂肉身。",
+                                ts=datetime.now(timezone.utc),
+                                is_reply=True,
+                                is_reply_to_me=True,
+                            )
+                        )
+                    )
+                return 100 + len(sends)
+
+        class MainPlugin:
+            name = "main"
+            enabled = True
+            priority = 10
+
+            async def bootstrap(self, scheduler, send) -> None:  # type: ignore[no-untyped-def]
+                _ = (scheduler, send)
+
+            async def on_message(self, ctx: MessageContext):  # type: ignore[no-untyped-def]
+                _ = ctx
+                return None
+
+        class AvatarPlugin:
+            name = "avatar"
+            enabled = True
+            priority = 10
+
+            async def bootstrap(self, scheduler, send) -> None:  # type: ignore[no-untyped-def]
+                async def run_actions() -> None:
+                    await send("avatar", ".观星台", True)
+                    await send("avatar", ".闯塔", True)
+
+                await scheduler.schedule(
+                    key="avatar.bootstrap",
+                    delay_seconds=0.0,
+                    action=run_actions,
+                )
+
+            async def on_message(self, ctx: MessageContext):  # type: ignore[no-untyped-def]
+                _ = ctx
+                return None
+
+        def fake_build_plugins(config, logger):  # type: ignore[no-untyped-def]
+            _ = logger
+            if config.my_name == "锐锋子":
+                return [AvatarPlugin()]
+            return [MainPlugin()]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "app.sqlite3"
+            repo = AccountRepository(str(path), logging.getLogger("test"))
+            config = _dummy_config(
+                my_name="寒山子",
+                auto_return_main_delay_seconds=120,
+                identity_profiles=(
+                    IdentityProfile(
+                        key="main",
+                        kind="main",
+                        my_name="寒山子",
+                        switch_target="主魂",
+                        display_name="主魂",
+                    ),
+                    IdentityProfile(
+                        key="avatar",
+                        kind="avatar",
+                        my_name="锐锋子",
+                        switch_target="锐锋子",
+                        display_name="锐锋子",
+                    ),
+                ),
+            )
+            record = repo.create_account("alpha", config, enabled=True)
+            system_config = SystemConfig(app_db_path=str(path), log_dir=str(Path(tmpdir) / "logs"))
+            runner = AccountRunner(record, system_config)
+
+            with patch("xiuxian_bot.runtime.Scheduler", FakeScheduler), patch(
+                "xiuxian_bot.runtime.ReliableSender",
+                FakeSender,
+            ), patch("xiuxian_bot.runtime.TGAdapter", FakeAdapter), patch(
+                "xiuxian_bot.runtime.build_plugins",
+                side_effect=fake_build_plugins,
+            ):
+                await runner.start()
+                await asyncio.sleep(0.08)
+                self.assertIn(("avatar", ".观星台"), sends)
+                self.assertIn(("avatar", ".闯塔"), sends)
+                self.assertEqual(len(scheduled_return_main), 2)
+                self.assertNotIn(("__identity__", ".切换 主魂"), sends)
+                await scheduled_return_main[-1][1]()
+                self.assertIn(("__identity__", ".切换 主魂"), sends)
+                await runner.stop()
+
+            repo.close()
+
+    async def test_account_runner_can_disable_auto_return_main_after_avatar_action(self) -> None:
+        from xiuxian_bot.runtime import AccountRunner
+
+        sends: list[tuple[str, str]] = []
 
         class FakeScheduler:
             def __init__(self, logger) -> None:  # type: ignore[no-untyped-def]
@@ -665,7 +1056,6 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
                 reply_to_msg_id: int | None = None,
                 identity_key: str | None = None,
             ) -> int | None:
-                _ = (reply_to_topic, reply_to_msg_id, identity_key)
                 sends.append((plugin, text))
                 if text == ".切换 锐锋子":
                     adapter = self.kwargs["send_message"].__self__
@@ -691,9 +1081,6 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
             enabled = True
             priority = 10
 
-            def __init__(self, config, logger) -> None:  # type: ignore[no-untyped-def]
-                _ = (config, logger)
-
             async def bootstrap(self, scheduler, send) -> None:  # type: ignore[no-untyped-def]
                 _ = (scheduler, send)
 
@@ -705,10 +1092,6 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
             name = "avatar"
             enabled = True
             priority = 10
-
-            def __init__(self, config, logger) -> None:  # type: ignore[no-untyped-def]
-                self.config = config
-                self.logger = logger
 
             async def bootstrap(self, scheduler, send) -> None:  # type: ignore[no-untyped-def]
                 await scheduler.schedule(
@@ -722,15 +1105,17 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
                 return None
 
         def fake_build_plugins(config, logger):  # type: ignore[no-untyped-def]
+            _ = logger
             if config.my_name == "锐锋子":
-                return [AvatarPlugin(config, logger)]
-            return [MainPlugin(config, logger)]
+                return [AvatarPlugin()]
+            return [MainPlugin()]
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "app.sqlite3"
             repo = AccountRepository(str(path), logging.getLogger("test"))
             config = _dummy_config(
                 my_name="寒山子",
+                auto_return_main_after_avatar_action=False,
                 identity_profiles=(
                     IdentityProfile(
                         key="main",
@@ -765,6 +1150,7 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
 
             self.assertIn(("__identity__", ".切换 锐锋子"), sends)
             self.assertIn(("avatar", ".闯塔"), sends)
+            self.assertNotIn(("__identity__", ".切换 主魂"), sends)
             repo.close()
 
     async def test_account_runner_binds_reply_to_sending_identity_instead_of_active_identity(self) -> None:
@@ -1234,6 +1620,8 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                                 "switch_success_keywords": "切换成功,神念已附着",
                                 "switch_back_success_keywords": "神念重归主魂肉身",
                                 "switch_failure_keywords": "未找到道号或ID",
+                                "auto_return_main_after_avatar_action": "on",
+                                "auto_return_main_delay_seconds": "120",
                                 "status_command": ".状态",
                                 "status_identity_header_keyword": "修士状态",
                                 "identity_key": ["main", "ruifengzi"],

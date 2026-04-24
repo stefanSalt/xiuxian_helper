@@ -347,6 +347,8 @@ class Config:
     switch_success_keywords: str = "切换成功,神念已附着"
     switch_back_success_keywords: str = "神念重归主魂肉身"
     switch_failure_keywords: str = "未找到道号或ID"
+    auto_return_main_after_avatar_action: bool = True
+    auto_return_main_delay_seconds: int = 120
     status_command: str = ".状态"
     status_identity_header_keyword: str = "修士状态"
 
@@ -650,6 +652,17 @@ class Config:
             or "神念重归主魂肉身",
             switch_failure_keywords=str(data.get("switch_failure_keywords", "未找到道号或ID")).strip()
             or "未找到道号或ID",
+            auto_return_main_after_avatar_action=_parse_bool(
+                data.get("auto_return_main_after_avatar_action", True),
+                "auto_return_main_after_avatar_action",
+            ),
+            auto_return_main_delay_seconds=max(
+                0,
+                _parse_int(
+                    data.get("auto_return_main_delay_seconds", 120),
+                    "auto_return_main_delay_seconds",
+                ),
+            ),
             status_command=str(data.get("status_command", ".状态")).strip() or ".状态",
             status_identity_header_keyword=str(data.get("status_identity_header_keyword", "修士状态")).strip()
             or "修士状态",
