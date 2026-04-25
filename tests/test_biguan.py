@@ -13,6 +13,7 @@ def _dummy_config(
     enable_biguan: bool = True,
     enable_xinggong: bool = False,
     enable_xinggong_deep_biguan: bool = False,
+    biguan_mode: str = "normal",
 ) -> Config:
     return Config(
         tg_api_id=1,
@@ -38,6 +39,9 @@ def _dummy_config(
         biguan_cooldown_jitter_max_seconds=15,
         biguan_retry_jitter_min_seconds=3,
         biguan_retry_jitter_max_seconds=3,
+        biguan_mode=biguan_mode,
+        biguan_deep_settle_command=".状态",
+        biguan_deep_duration_seconds=8 * 3600 + 180,
         garden_seed_name="清灵草种子",
         garden_poll_interval_seconds=3600,
         garden_action_spacing_seconds=25,
@@ -57,7 +61,28 @@ def _dummy_config(
         zongmen_chuangong_xinde_text="宗门传功",
         zongmen_catch_up=True,
         zongmen_action_spacing_seconds=20,
+        enable_xinggong_wenan=True,
         enable_xinggong_deep_biguan=enable_xinggong_deep_biguan,
+        enable_xinggong_guanxing=False,
+        xinggong_guanxing_target_username="salt9527",
+        xinggong_guanxing_preview_advance_seconds=180,
+        xinggong_guanxing_shift_advance_seconds=1.0,
+        xinggong_guanxing_watch_events="星辰异象,地磁暴动",
+        enable_yuanying_liefeng=True,
+        global_send_min_interval_seconds=10,
+        state_db_path="xiuxian_state.sqlite3",
+        enable_chuangta=False,
+        chuangta_time="14:15",
+        enable_lingxiaogong=False,
+        enable_lingxiaogong_wenxintai=True,
+        enable_lingxiaogong_jiutian=True,
+        enable_lingxiaogong_dengtianjie=True,
+        lingxiaogong_poll_interval_seconds=300,
+        lingxiaogong_wenxintai_after_climb_count=4,
+        enable_random_event_nanlonghou=True,
+        random_event_nanlonghou_action=".交换 功法",
+        enable_random_event_jiyin=True,
+        random_event_jiyin_action=".献上魂魄",
         account_id="default",
         account_name="default",
         identity_profiles=(
@@ -76,6 +101,8 @@ def _dummy_config(
         switch_success_keywords="切换成功,神念已附着",
         switch_back_success_keywords="神念重归主魂肉身",
         switch_failure_keywords="未找到道号或ID",
+        auto_return_main_after_avatar_action=True,
+        auto_return_main_delay_seconds=120,
         status_command=".状态",
         status_identity_header_keyword="修士状态",
     )
@@ -188,6 +215,78 @@ class TestBiguanPlugin(unittest.IsolatedAsyncioTestCase):
             await timeout_action()
 
         self.assertEqual(len(send_calls), 1)
+
+    async def test_deep_mode_bootstrap_enters_deep_biguan(self) -> None:
+        plugin = AutoBiguanPlugin(
+            _dummy_config(biguan_mode="deep"),
+            logging.getLogger("test"),
+        )
+        scheduled: list[tuple[str, float, object]] = []
+        send_calls: list[tuple[str, str, bool]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                scheduled.append((key, delay_seconds, action))
+
+        async def _send(plugin_name: str, text: str, reply_to_topic: bool) -> int | None:
+            send_calls.append((plugin_name, text, reply_to_topic))
+            return 1
+
+        await plugin.bootstrap(_FakeScheduler(), _send)
+
+        self.assertEqual(send_calls, [("biguan", ".深度闭关", True)])
+        self.assertEqual(len(scheduled), 1)
+        self.assertEqual(scheduled[0][0], "biguan.deep.settle")
+        self.assertEqual(scheduled[0][1], 8 * 3600 + 180)
+
+    async def test_deep_mode_settle_sends_settle_normal_and_reenters_deep(self) -> None:
+        plugin = AutoBiguanPlugin(
+            _dummy_config(biguan_mode="deep"),
+            logging.getLogger("test"),
+        )
+        scheduled: list[tuple[str, float, object]] = []
+        send_calls: list[tuple[str, str, bool]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                scheduled.append((key, delay_seconds, action))
+
+        async def _send(plugin_name: str, text: str, reply_to_topic: bool) -> int | None:
+            send_calls.append((plugin_name, text, reply_to_topic))
+            return 1
+
+        await plugin.bootstrap(_FakeScheduler(), _send)
+        plugin._deep_until_at = datetime.now() - timedelta(seconds=1)  # type: ignore[attr-defined]
+        await scheduled[0][2]()
+
+        self.assertEqual(
+            send_calls,
+            [
+                ("biguan", ".深度闭关", True),
+                ("biguan", ".状态", True),
+                ("biguan", ".闭关修炼", True),
+                ("biguan", ".深度闭关", True),
+            ],
+        )
+        self.assertEqual([entry[0] for entry in scheduled], ["biguan.deep.settle", "biguan.deep.settle"])
+
+    async def test_deep_mode_ignores_normal_cooldown_replies(self) -> None:
+        plugin = AutoBiguanPlugin(
+            _dummy_config(biguan_mode="deep"),
+            logging.getLogger("test"),
+        )
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=3,
+            reply_to_msg_id=123,
+            sender_id=999,
+            text="@Me 打坐调息 10 分钟",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=True,
+        )
+
+        self.assertIsNone(await plugin.on_message(ctx))
 
 
 if __name__ == "__main__":

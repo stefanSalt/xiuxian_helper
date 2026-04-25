@@ -16,10 +16,13 @@ class AutoBiguanPlugin:
     priority = 100
     _FEEDBACK_TIMEOUT_SECONDS = 15 * 60
     _FEEDBACK_TIMEOUT_KEY_PREFIX = "biguan.feedback_timeout"
+    _CMD_DEEP_BIGUAN = ".深度闭关"
+    _DEEP_SETTLE_KEY = "biguan.deep.settle"
 
     def __init__(self, config: Config, logger: logging.Logger) -> None:
         self._config = config
         self._logger = logger
+        self._mode = config.biguan_mode
         self.enabled = bool(
             config.enable_biguan
             and not (config.enable_xinggong and config.enable_xinggong_deep_biguan)
@@ -29,6 +32,7 @@ class AutoBiguanPlugin:
         self._state_store: SQLiteStateStore | None = None
         self._next_attempt_at: datetime | None = None
         self._pending_feedback_deadline_at: datetime | None = None
+        self._deep_until_at: datetime | None = None
 
     def set_state_store(self, state_store: SQLiteStateStore) -> None:
         self._state_store = state_store
@@ -39,6 +43,7 @@ class AutoBiguanPlugin:
         state = self._state_store.load_state(self.name)
         self._next_attempt_at = deserialize_datetime(state.get("next_attempt_at"))
         self._pending_feedback_deadline_at = deserialize_datetime(state.get("pending_feedback_deadline_at"))
+        self._deep_until_at = deserialize_datetime(state.get("deep_until_at"))
 
     def _save_state(self) -> None:
         if self._state_store is None:
@@ -48,6 +53,7 @@ class AutoBiguanPlugin:
             {
                 "next_attempt_at": serialize_datetime(self._next_attempt_at),
                 "pending_feedback_deadline_at": serialize_datetime(self._pending_feedback_deadline_at),
+                "deep_until_at": serialize_datetime(self._deep_until_at),
             },
         )
 
@@ -56,6 +62,9 @@ class AutoBiguanPlugin:
             return
         self._scheduler = scheduler
         self._send = send
+        if self._mode == "deep":
+            await self._bootstrap_deep_mode()
+            return
         if self._next_attempt_at is None:
             if self._pending_feedback_deadline_at is None:
                 return
@@ -65,6 +74,52 @@ class AutoBiguanPlugin:
         if self._pending_feedback_deadline_at is not None:
             delay_seconds = max(0.0, (self._pending_feedback_deadline_at - datetime.now()).total_seconds())
             await self._schedule_feedback_timeout(delay_seconds, self._pending_feedback_deadline_at)
+
+    async def _bootstrap_deep_mode(self) -> None:
+        self._next_attempt_at = None
+        self._pending_feedback_deadline_at = None
+        self._save_state()
+        if self._deep_until_at is None:
+            await self._enter_deep_biguan()
+            return
+        delay_seconds = max(0.0, (self._deep_until_at - datetime.now()).total_seconds())
+        await self._schedule_deep_settle(delay_seconds)
+
+    async def _schedule_deep_settle(self, delay_seconds: float) -> None:
+        if self._scheduler is None:
+            return
+
+        async def _runner() -> None:
+            await self._run_deep_settle()
+
+        await self._scheduler.schedule(
+            key=self._DEEP_SETTLE_KEY,
+            delay_seconds=max(0.0, delay_seconds),
+            action=_runner,
+        )
+
+    async def _enter_deep_biguan(self) -> None:
+        if not self.enabled or self._send is None:
+            return
+        self._deep_until_at = datetime.now() + timedelta(
+            seconds=self._config.biguan_deep_duration_seconds
+        )
+        self._save_state()
+        await self._send(self.name, self._CMD_DEEP_BIGUAN, True)
+        await self._schedule_deep_settle(float(self._config.biguan_deep_duration_seconds))
+
+    async def _run_deep_settle(self) -> None:
+        if not self.enabled or self._send is None:
+            return
+        now = datetime.now()
+        if self._deep_until_at is not None and self._deep_until_at > now:
+            await self._schedule_deep_settle((self._deep_until_at - now).total_seconds())
+            return
+        self._deep_until_at = None
+        self._save_state()
+        await self._send(self.name, self._config.biguan_deep_settle_command, True)
+        await self._send(self.name, self._config.action_cmd_biguan, True)
+        await self._enter_deep_biguan()
 
     async def _schedule_next(self, delay_seconds: float) -> None:
         if self._scheduler is None:
@@ -148,6 +203,8 @@ class AutoBiguanPlugin:
         ]
 
     async def on_message(self, ctx: MessageContext) -> list[SendAction] | None:
+        if self._mode == "deep":
+            return None
         text = ctx.text
 
         # 0) 奇遇：闭关冷却被重置 -> 立即再次闭关

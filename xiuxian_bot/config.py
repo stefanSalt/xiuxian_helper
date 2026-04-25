@@ -306,6 +306,11 @@ class Config:
     zongmen_catch_up: bool
     zongmen_action_spacing_seconds: int
 
+    # Biguan mode
+    biguan_mode: str = "normal"
+    biguan_deep_settle_command: str = ".状态"
+    biguan_deep_duration_seconds: int = 8 * 3600 + 180
+
     # Xinggong sub-features
     enable_message_archive: bool = True
     enable_xinggong_wenan: bool = True
@@ -448,6 +453,9 @@ class Config:
         zongmen_chuangong_times = _parse_optional_str(data.get("zongmen_chuangong_times"))
         if enable_zongmen and (zongmen_dianmao_time is None or zongmen_chuangong_times is None):
             raise ValueError("启用宗门功能时必须填写点卯时间和传功时间")
+        biguan_mode = str(data.get("biguan_mode", "normal")).strip().lower() or "normal"
+        if biguan_mode not in {"normal", "deep"}:
+            raise ValueError("biguan_mode 必须是 normal 或 deep")
         identities_raw = data.get("identity_profiles")
         identity_profiles: tuple[IdentityProfile, ...]
         if isinstance(identities_raw, list):
@@ -511,6 +519,18 @@ class Config:
             biguan_retry_jitter_max_seconds=_parse_int(
                 data.get("biguan_retry_jitter_max_seconds", 8),
                 "biguan_retry_jitter_max_seconds",
+            ),
+            biguan_mode=biguan_mode,
+            biguan_deep_settle_command=str(
+                data.get("biguan_deep_settle_command", ".状态")
+            ).strip()
+            or ".状态",
+            biguan_deep_duration_seconds=max(
+                60,
+                _parse_int(
+                    data.get("biguan_deep_duration_seconds", 8 * 3600 + 180),
+                    "biguan_deep_duration_seconds",
+                ),
             ),
             garden_seed_name=str(data.get("garden_seed_name", "清灵草种子")).strip() or "清灵草种子",
             garden_poll_interval_seconds=_parse_int(
@@ -747,6 +767,15 @@ class Config:
             ),
             "biguan_retry_jitter_max_seconds": _get_env_int(
                 "BIGUAN_RETRY_JITTER_MAX_SECONDS", default=8
+            ),
+            "biguan_mode": _get_env_str("BIGUAN_MODE", default="normal"),
+            "biguan_deep_settle_command": _get_env_str(
+                "BIGUAN_DEEP_SETTLE_COMMAND",
+                default=".状态",
+            ),
+            "biguan_deep_duration_seconds": _get_env_int(
+                "BIGUAN_DEEP_DURATION_SECONDS",
+                default=8 * 3600 + 180,
             ),
             "garden_seed_name": _get_env_str("GARDEN_SEED_NAME", default="清灵草种子"),
             "garden_poll_interval_seconds": _get_env_int(
