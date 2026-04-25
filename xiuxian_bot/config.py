@@ -311,6 +311,11 @@ class Config:
     biguan_deep_settle_command: str = ".状态"
     biguan_deep_duration_seconds: int = 8 * 3600 + 180
 
+    # Daily
+    daily_bushi_times_per_day: int = 5
+    daily_bushi_interval_seconds: int = 120
+    daily_bushi_exchange_action: str = ".换取"
+
     # Xinggong sub-features
     enable_message_archive: bool = True
     enable_xinggong_wenan: bool = True
@@ -532,6 +537,27 @@ class Config:
                     "biguan_deep_duration_seconds",
                 ),
             ),
+            daily_bushi_times_per_day=min(
+                10,
+                max(
+                    0,
+                    _parse_int(
+                        data.get("daily_bushi_times_per_day") or 5,
+                        "daily_bushi_times_per_day",
+                    ),
+                ),
+            ),
+            daily_bushi_interval_seconds=max(
+                120,
+                _parse_int(
+                    data.get("daily_bushi_interval_seconds") or 120,
+                    "daily_bushi_interval_seconds",
+                ),
+            ),
+            daily_bushi_exchange_action=str(
+                data.get("daily_bushi_exchange_action", ".换取")
+            ).strip()
+            or ".换取",
             garden_seed_name=str(data.get("garden_seed_name", "清灵草种子")).strip() or "清灵草种子",
             garden_poll_interval_seconds=_parse_int(
                 data.get("garden_poll_interval_seconds", 3600),
@@ -776,6 +802,18 @@ class Config:
             "biguan_deep_duration_seconds": _get_env_int(
                 "BIGUAN_DEEP_DURATION_SECONDS",
                 default=8 * 3600 + 180,
+            ),
+            "daily_bushi_times_per_day": _get_env_int(
+                "DAILY_BUSHI_TIMES_PER_DAY",
+                default=5,
+            ),
+            "daily_bushi_interval_seconds": _get_env_int(
+                "DAILY_BUSHI_INTERVAL_SECONDS",
+                default=120,
+            ),
+            "daily_bushi_exchange_action": _get_env_str(
+                "DAILY_BUSHI_EXCHANGE_ACTION",
+                default=".换取",
             ),
             "garden_seed_name": _get_env_str("GARDEN_SEED_NAME", default="清灵草种子"),
             "garden_poll_interval_seconds": _get_env_int(

@@ -116,6 +116,27 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config.lingxiaogong_wenxintai_after_climb_count, 4)
         self.assertEqual(config.system_reply_source_usernames, "hantianzunhl,@foo, https://t.me/bar")
 
+    def test_from_mapping_accepts_daily_bushi_fields(self) -> None:
+        config = Config.from_mapping(
+            {
+                "tg_api_id": "1",
+                "tg_api_hash": "hash",
+                "tg_session_name": "session",
+                "game_chat_id": "-100",
+                "topic_id": "123",
+                "my_name": "Me",
+                "enable_daily": "true",
+                "daily_bushi_times_per_day": "7",
+                "daily_bushi_interval_seconds": "90",
+                "daily_bushi_exchange_action": ".换取",
+            }
+        )
+
+        self.assertTrue(config.enable_daily)
+        self.assertEqual(config.daily_bushi_times_per_day, 7)
+        self.assertEqual(config.daily_bushi_interval_seconds, 120)
+        self.assertEqual(config.daily_bushi_exchange_action, ".换取")
+
     def test_from_mapping_accepts_fractional_xinggong_shift_advance_seconds(self) -> None:
         config = Config.from_mapping(
             {
@@ -214,6 +235,31 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config.lingxiaogong_poll_interval_seconds, 240)
         self.assertEqual(config.lingxiaogong_wenxintai_after_climb_count, 5)
         self.assertEqual(config.system_reply_source_usernames, "hantianzunhl,foo")
+
+    def test_load_legacy_env_accepts_daily_bushi_fields(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "TG_API_ID": "1",
+                "TG_API_HASH": "hash",
+                "TG_SESSION_NAME": "session",
+                "GAME_CHAT_ID": "-100",
+                "TOPIC_ID": "123",
+                "MY_NAME": "Me",
+                "ENABLE_DAILY": "true",
+                "DAILY_BUSHI_TIMES_PER_DAY": "6",
+                "DAILY_BUSHI_INTERVAL_SECONDS": "150",
+                "DAILY_BUSHI_EXCHANGE_ACTION": ".换取",
+            },
+            clear=True,
+        ):
+            config = Config.load_legacy_env()
+
+        assert config is not None
+        self.assertTrue(config.enable_daily)
+        self.assertEqual(config.daily_bushi_times_per_day, 6)
+        self.assertEqual(config.daily_bushi_interval_seconds, 150)
+        self.assertEqual(config.daily_bushi_exchange_action, ".换取")
 
     def test_system_config_load_accepts_message_archive_retention_fields(self) -> None:
         with patch("xiuxian_bot.config._load_dotenv", return_value=None), patch.dict(

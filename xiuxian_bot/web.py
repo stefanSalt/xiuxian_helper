@@ -111,7 +111,7 @@ FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
         "插件开关",
         [
             {"name": "enable_biguan", "label": "自动闭关", "type": "checkbox"},
-            {"name": "enable_daily", "label": "Daily 占位插件", "type": "checkbox"},
+            {"name": "enable_daily", "label": "日常·卜筮问天", "type": "checkbox"},
             {"name": "enable_garden", "label": "自动种植", "type": "checkbox"},
             {"name": "enable_xinggong", "label": "星宫", "type": "checkbox"},
             {"name": "enable_yuanying", "label": "元婴", "type": "checkbox"},
@@ -134,6 +134,14 @@ FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
             {"name": "biguan_cooldown_jitter_max_seconds", "label": "闭关随机最大(秒)", "type": "number"},
             {"name": "biguan_retry_jitter_min_seconds", "label": "闭关重试最小(秒)", "type": "number"},
             {"name": "biguan_retry_jitter_max_seconds", "label": "闭关重试最大(秒)", "type": "number"},
+        ],
+    ),
+    (
+        "日常",
+        [
+            {"name": "daily_bushi_times_per_day", "label": "卜筮问天每日次数(0-10)", "type": "number"},
+            {"name": "daily_bushi_interval_seconds", "label": "卜筮问天间隔(秒，至少120)", "type": "number"},
+            {"name": "daily_bushi_exchange_action", "label": "神物现世换取指令", "type": "text"},
         ],
     ),
     (
@@ -258,6 +266,9 @@ def _template_values_for_new(system_config: SystemConfig) -> dict[str, Any]:
         "biguan_cooldown_jitter_max_seconds": 15,
         "biguan_retry_jitter_min_seconds": 3,
         "biguan_retry_jitter_max_seconds": 8,
+        "daily_bushi_times_per_day": 5,
+        "daily_bushi_interval_seconds": 120,
+        "daily_bushi_exchange_action": ".换取",
         "garden_seed_name": "清灵草种子",
         "garden_poll_interval_seconds": 3600,
         "garden_action_spacing_seconds": 25,
