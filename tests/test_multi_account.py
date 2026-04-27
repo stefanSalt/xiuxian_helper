@@ -3,7 +3,7 @@ import importlib.util
 import logging
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -1649,6 +1649,168 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(handled_by, ["main"])
             repo.close()
 
+    async def test_guanxing_event_routes_to_single_listener_identity(self) -> None:
+        from xiuxian_bot.plugins.xinggong import AutoXinggongPlugin
+        from xiuxian_bot.runtime import AccountRunner
+
+        class FakeScheduler:
+            def __init__(self, logger) -> None:  # type: ignore[no-untyped-def]
+                self.logger = logger
+
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                _ = (key, delay_seconds, action)
+                return None
+
+            async def cancel_all(self) -> None:
+                return None
+
+        class FakeAdapter:
+            def __init__(self, config, logger, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                _ = kwargs
+                self.config = config
+                self.logger = logger
+                self.me_id = 1
+                self._new_handler = None
+
+            def on_new_message(self, handler) -> None:  # type: ignore[no-untyped-def]
+                self._new_handler = handler
+
+            def on_message_edited(self, handler) -> None:  # type: ignore[no-untyped-def]
+                _ = handler
+
+            async def start(self) -> None:
+                return None
+
+            async def send_message(
+                self,
+                text: str,
+                *,
+                reply_to_topic: bool = True,
+                reply_to_msg_id: int | None = None,
+            ) -> int | None:
+                _ = (text, reply_to_topic, reply_to_msg_id)
+                return 7001
+
+            async def build_context(self, event) -> MessageContext:  # type: ignore[no-untyped-def]
+                return event
+
+            async def run_forever(self) -> None:
+                assert self._new_handler is not None
+                await self._new_handler(
+                    MessageContext(
+                        chat_id=-100,
+                        message_id=9001,
+                        reply_to_msg_id=123,
+                        sender_id=999,
+                        text=(
+                            "【星盘显化】@other 闭目凝神，推演天机...\n"
+                            "下一次天道演化将是：【Good·封魔裂隙回响】\n"
+                            "当前天命所归：@someone"
+                        ),
+                        ts=datetime.now(timezone.utc),
+                        is_reply=True,
+                        is_reply_to_me=False,
+                    )
+                )
+                await asyncio.sleep(0.01)
+
+            async def stop(self) -> None:
+                return None
+
+        class FakeSender:
+            def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                self.kwargs = kwargs
+
+            async def send(
+                self,
+                plugin: str,
+                text: str,
+                reply_to_topic: bool,
+                *,
+                reply_to_msg_id: int | None = None,
+                identity_key: str | None = None,
+            ) -> int | None:
+                _ = (plugin, reply_to_topic, reply_to_msg_id, identity_key)
+                return 7001
+
+        def fake_build_plugins(config, logger):  # type: ignore[no-untyped-def]
+            return [AutoXinggongPlugin(config, logger)]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "app.sqlite3"
+            repo = AccountRepository(str(path), logging.getLogger("test"))
+            config = _dummy_config(
+                my_name="寒山子",
+                enable_xinggong=True,
+                enable_xinggong_guanxing=False,
+                xinggong_guanxing_watch_events="星辰异象,地磁暴动,封魔裂隙回响",
+                identity_profiles=(
+                    IdentityProfile(
+                        key="main",
+                        kind="main",
+                        my_name="寒山子",
+                        switch_target="主魂",
+                        display_name="主魂",
+                        config_overrides={"enable_xinggong_guanxing": False},
+                    ),
+                    IdentityProfile(
+                        key="avatar_a",
+                        kind="avatar",
+                        my_name="锐锋子",
+                        switch_target="锐锋子",
+                        display_name="锐锋子",
+                        config_overrides={"enable_xinggong_guanxing": True},
+                    ),
+                    IdentityProfile(
+                        key="avatar_b",
+                        kind="avatar",
+                        my_name="青玄子",
+                        switch_target="青玄子",
+                        display_name="青玄子",
+                        config_overrides={"enable_xinggong_guanxing": True},
+                    ),
+                ),
+                active_identity_key="main",
+            )
+            record = repo.create_account("alpha", config, enabled=True)
+            system_config = SystemConfig(app_db_path=str(path), log_dir=str(Path(tmpdir) / "logs"))
+            runner = AccountRunner(record, system_config)
+
+            with patch("xiuxian_bot.runtime.Scheduler", FakeScheduler), patch(
+                "xiuxian_bot.runtime.ReliableSender",
+                FakeSender,
+            ), patch("xiuxian_bot.runtime.TGAdapter", FakeAdapter), patch(
+                "xiuxian_bot.runtime.build_plugins",
+                side_effect=fake_build_plugins,
+            ), patch.object(
+                AutoXinggongPlugin,
+                "_should_ignore_external_guanxing_preview",
+                return_value=False,
+            ), patch.object(
+                AutoXinggongPlugin,
+                "_next_guanxing_settlement_at",
+                lambda self, now: now + timedelta(minutes=10),
+            ):
+                await runner.start()
+                await asyncio.sleep(0.05)
+                await runner.stop()
+
+            store = SQLiteStateStore(str(path), account_id=f"{record.id}:avatar_a")
+            avatar_a_state = store.load_state("xinggong")
+            store.close()
+            store = SQLiteStateStore(str(path), account_id=f"{record.id}:avatar_b")
+            avatar_b_state = store.load_state("xinggong")
+            store.close()
+            store = SQLiteStateStore(str(path), account_id=f"{record.id}:main")
+            main_state = store.load_state("xinggong")
+            store.close()
+
+            self.assertTrue(avatar_a_state.get("guanxing_claim_active"))
+            self.assertEqual(avatar_a_state.get("guanxing_claim_event"), "封魔裂隙回响")
+            self.assertFalse(avatar_b_state.get("guanxing_claim_active", False))
+            self.assertFalse(main_state.get("guanxing_claim_active", False))
+            repo.close()
+
 
 @unittest.skipUnless(HAS_WEB_DEPS, "requires fastapi/httpx/telethon dependencies")
 class TestWebApp(unittest.IsolatedAsyncioTestCase):
@@ -1769,6 +1931,7 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                                 "identity_override_enable_biguan": ["inherit", "off"],
                                 "identity_override_enable_garden": ["inherit", "inherit"],
                                 "identity_override_enable_xinggong": ["inherit", "inherit"],
+                                "identity_override_enable_xinggong_guanxing": ["off", "on"],
                                 "identity_override_enable_yuanying": ["inherit", "inherit"],
                                 "identity_override_enable_chuangta": ["inherit", "on"],
                                 "identity_override_enable_lingxiaogong": ["inherit", "inherit"],
@@ -1842,6 +2005,7 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         self.assertIn("自动引九天罡风", edit_page.text)
                         self.assertIn("额外系统来源", edit_page.text)
                         self.assertIn("消息归档", edit_page.text)
+                        self.assertIn("观星劫持", edit_page.text)
                         self.assertIn("身份配置", edit_page.text)
                         self.assertIn("新增化身", edit_page.text)
                         self.assertNotIn("身份组 JSON", edit_page.text)
@@ -1858,7 +2022,11 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(avatar.game_id, "7467781636")
                         self.assertEqual(
                             avatar.config_overrides,
-                            {"enable_biguan": False, "enable_chuangta": True},
+                            {
+                                "enable_biguan": False,
+                                "enable_xinggong_guanxing": True,
+                                "enable_chuangta": True,
+                            },
                         )
 
                         logs_page = await client.get("/accounts/1/logs")

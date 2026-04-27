@@ -57,6 +57,7 @@ IDENTITY_OVERRIDE_FIELDS: tuple[dict[str, str], ...] = (
     {"name": "enable_biguan", "label": "自动闭关"},
     {"name": "enable_garden", "label": "小药园"},
     {"name": "enable_xinggong", "label": "星宫"},
+    {"name": "enable_xinggong_guanxing", "label": "观星劫持"},
     {"name": "enable_yuanying", "label": "元婴"},
     {"name": "enable_chuangta", "label": "闯塔"},
     {"name": "enable_lingxiaogong", "label": "凌霄宫"},

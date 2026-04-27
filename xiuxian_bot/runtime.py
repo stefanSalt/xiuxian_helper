@@ -38,6 +38,10 @@ class _FocusFilter(logging.Filter):
 
 
 _WS_RE = re.compile(r"\s+")
+_GUANXING_EVENT_ANCHORS = (
+    normalize_match_text("星盘显化"),
+    normalize_match_text("天机异动"),
+)
 
 
 def _short_text(text: str, max_chars: int = 160) -> str:
@@ -77,6 +81,11 @@ def _in_scope(config: Config, text: str, reply_to_msg_id: int | None, is_reply_t
         or any(name and name in text for name in config.all_identity_mentions)
         or is_reply_to_me
     )
+
+
+def _is_guanxing_route_candidate(text: str) -> bool:
+    normalized = normalize_match_text(text)
+    return any(anchor and anchor in normalized for anchor in _GUANXING_EVENT_ANCHORS)
 
 
 def _extract_topic_id_from_event(event) -> int | None:
@@ -581,6 +590,15 @@ class AccountRunner:
                 return matched
             return _active_runtime()
 
+        def _guanxing_listener_runtime() -> _IdentityRuntime | None:
+            for identity in base_config.identities:
+                runtime = runtimes.get(identity.key)
+                if runtime is None:
+                    continue
+                if runtime.config.enable_xinggong and runtime.config.enable_xinggong_guanxing:
+                    return runtime
+            return None
+
         async def _on_event(event, event_type: str) -> None:
             ctx = await adapter.build_context(event)
             identity_switch.observe(ctx)
@@ -588,6 +606,8 @@ class AccountRunner:
             if not _in_scope(base_config, ctx.text, ctx.reply_to_msg_id, ctx.is_reply_to_me):
                 return
             runtime = _runtime_for_context(ctx)
+            if _is_guanxing_route_candidate(ctx.text):
+                runtime = _guanxing_listener_runtime() or runtime
             if adapter.me_id is not None and ctx.sender_id != adapter.me_id:
                 interesting = (
                     ctx.is_reply_to_me
