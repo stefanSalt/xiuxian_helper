@@ -172,6 +172,25 @@ class TestConfig(unittest.TestCase):
                 }
             )
 
+    def test_from_mapping_accepts_shiqie_fields(self) -> None:
+        config = Config.from_mapping(
+            {
+                "tg_api_id": "1",
+                "tg_api_hash": "hash",
+                "tg_session_name": "session",
+                "game_chat_id": "-100",
+                "topic_id": "123",
+                "my_name": "Me",
+                "enable_shiqie": "true",
+                "shiqie_tianji_interval_seconds": "43200",
+                "shiqie_rumeng_interval_seconds": "28800",
+            }
+        )
+
+        self.assertTrue(config.enable_shiqie)
+        self.assertEqual(config.shiqie_tianji_interval_seconds, 43200)
+        self.assertEqual(config.shiqie_rumeng_interval_seconds, 28800)
+
     def test_from_mapping_accepts_fractional_xinggong_shift_advance_seconds(self) -> None:
         config = Config.from_mapping(
             {

@@ -22,6 +22,7 @@ from .plugins.daily import DailyPlugin
 from .plugins.garden import AutoGardenPlugin
 from .plugins.lingxiaogong import AutoLingxiaogongPlugin
 from .plugins.random_event import AutoRandomEventPlugin
+from .plugins.shiqie import ShiqiePlugin
 from .plugins.wild_explore import WildExplorePlugin
 from .plugins.xinggong import AutoXinggongPlugin
 from .plugins.yuanying import AutoYuanyingPlugin
@@ -214,6 +215,7 @@ def build_plugins(config: Config, logger: logging.Logger) -> list[object]:
         AutoChuangtaPlugin(config, logger),
         AutoLingxiaogongPlugin(config, logger),
         AutoRandomEventPlugin(config, logger),
+        ShiqiePlugin(config, logger),
         WildExplorePlugin(config, logger),
         AutoXinggongPlugin(config, logger),
         AutoYuanyingPlugin(config, logger),

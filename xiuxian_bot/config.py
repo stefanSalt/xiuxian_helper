@@ -322,6 +322,11 @@ class Config:
     wild_explore_strategy: str = "深入"
     wild_explore_repeat_delay_seconds: int = 10
 
+    # Shiqie
+    enable_shiqie: bool = False
+    shiqie_tianji_interval_seconds: int = 12 * 3600
+    shiqie_rumeng_interval_seconds: int = 8 * 3600
+
     # Xinggong sub-features
     enable_message_archive: bool = True
     enable_xinggong_wenan: bool = True
@@ -476,6 +481,12 @@ class Config:
         wild_explore_repeat_delay = data.get("wild_explore_repeat_delay_seconds", 10)
         if str(wild_explore_repeat_delay).strip() == "":
             wild_explore_repeat_delay = 10
+        shiqie_tianji_interval = data.get("shiqie_tianji_interval_seconds", 12 * 3600)
+        if str(shiqie_tianji_interval).strip() == "":
+            shiqie_tianji_interval = 12 * 3600
+        shiqie_rumeng_interval = data.get("shiqie_rumeng_interval_seconds", 8 * 3600)
+        if str(shiqie_rumeng_interval).strip() == "":
+            shiqie_rumeng_interval = 8 * 3600
         identities_raw = data.get("identity_profiles")
         identity_profiles: tuple[IdentityProfile, ...]
         if isinstance(identities_raw, list):
@@ -590,6 +601,21 @@ class Config:
                 _parse_int(
                     wild_explore_repeat_delay,
                     "wild_explore_repeat_delay_seconds",
+                ),
+            ),
+            enable_shiqie=_parse_bool(data.get("enable_shiqie", False), "enable_shiqie"),
+            shiqie_tianji_interval_seconds=max(
+                60,
+                _parse_int(
+                    shiqie_tianji_interval,
+                    "shiqie_tianji_interval_seconds",
+                ),
+            ),
+            shiqie_rumeng_interval_seconds=max(
+                60,
+                _parse_int(
+                    shiqie_rumeng_interval,
+                    "shiqie_rumeng_interval_seconds",
                 ),
             ),
             garden_seed_name=str(data.get("garden_seed_name", "清灵草种子")).strip() or "清灵草种子",
@@ -858,6 +884,15 @@ class Config:
             "wild_explore_repeat_delay_seconds": _get_env_int(
                 "WILD_EXPLORE_REPEAT_DELAY_SECONDS",
                 default=10,
+            ),
+            "enable_shiqie": _get_env_bool("ENABLE_SHIQIE", default=False),
+            "shiqie_tianji_interval_seconds": _get_env_int(
+                "SHIQIE_TIANJI_INTERVAL_SECONDS",
+                default=12 * 3600,
+            ),
+            "shiqie_rumeng_interval_seconds": _get_env_int(
+                "SHIQIE_RUMENG_INTERVAL_SECONDS",
+                default=8 * 3600,
             ),
             "garden_seed_name": _get_env_str("GARDEN_SEED_NAME", default="清灵草种子"),
             "garden_poll_interval_seconds": _get_env_int(
