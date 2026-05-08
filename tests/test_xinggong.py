@@ -11,6 +11,7 @@ from xiuxian_bot.plugins.xinggong import AutoXinggongPlugin
 
 def _dummy_config(
     *,
+    my_name: str = "Me",
     enable_xinggong: bool = True,
     enable_xinggong_wenan: bool = True,
     enable_xinggong_deep_biguan: bool = False,
@@ -21,6 +22,8 @@ def _dummy_config(
     xinggong_guanxing_preview_advance_seconds: int = 180,
     xinggong_guanxing_shift_advance_seconds: float = 1.0,
     xinggong_guanxing_watch_events: str = "星辰异象,地磁暴动",
+    identity_profiles: tuple[IdentityProfile, ...] | None = None,
+    active_identity_key: str = "main",
 ) -> Config:
     return Config(
         tg_api_id=1,
@@ -28,7 +31,7 @@ def _dummy_config(
         tg_session_name="session",
         game_chat_id=-100,
         topic_id=123,
-        my_name="Me",
+        my_name=my_name,
         send_to_topic=True,
         action_cmd_biguan=".闭关修炼",
         dry_run=False,
@@ -74,16 +77,17 @@ def _dummy_config(
         xinggong_guanxing_watch_events=xinggong_guanxing_watch_events,
         account_id="default",
         account_name="default",
-        identity_profiles=(
+        identity_profiles=identity_profiles
+        or (
             IdentityProfile(
                 key="main",
                 kind="main",
-                my_name="Me",
+                my_name=my_name,
                 switch_target="主魂",
                 display_name="主魂",
             ),
         ),
-        active_identity_key="main",
+        active_identity_key=active_identity_key,
         switch_command_template=".切换 {target}",
         switch_list_command=".切换",
         switch_back_target="主魂",
@@ -634,6 +638,144 @@ class TestXinggongPlugin(unittest.IsolatedAsyncioTestCase):
             is_reply_to_me=False,
         )
         await plugin.on_message(success)
+        self.assertIsNotNone(getattr(plugin, "_qizhen_first_success_at"))
+
+    async def test_qizhen_invite_matches_active_avatar_without_at_tag(self) -> None:
+        base_config = _dummy_config(
+            my_name="寒山子",
+            identity_profiles=(
+                IdentityProfile(
+                    key="main",
+                    kind="main",
+                    my_name="寒山子",
+                    switch_target="主魂",
+                    display_name="主魂",
+                ),
+                IdentityProfile(
+                    key="avatar",
+                    kind="avatar",
+                    my_name="锐锋子",
+                    switch_target="锐锋子",
+                    display_name="锐锋子",
+                    game_id="7467781636",
+                ),
+            ),
+        )
+        plugin = AutoXinggongPlugin(base_config.apply_identity("avatar"), logging.getLogger("test"))
+        now = datetime.now()
+        setattr(plugin, "_cycle_date", plugin._cycle_date_for(now))  # type: ignore[attr-defined]
+        setattr(plugin, "_qizhen_pending_slot", 1)
+
+        invite = MessageContext(
+            chat_id=-100,
+            message_id=31,
+            reply_to_msg_id=123,
+            sender_id=999,
+            text="【周天星斗大阵-启】\n【星宫】弟子 锐锋子 正在布设大阵，尚需1 位同门相助!",
+            ts=datetime.now(timezone.utc),
+            is_reply=False,
+            is_reply_to_me=False,
+        )
+        actions = await plugin.on_message(invite)
+
+        self.assertIsNone(actions)
+        self.assertEqual(getattr(plugin, "_qizhen_last_invite_msg_id"), 31)
+        self.assertEqual(getattr(plugin, "_qizhen_last_invite_slot"), 1)
+
+    async def test_qizhen_invite_from_same_account_avatar_is_not_assisted_by_main(self) -> None:
+        config = _dummy_config(
+            my_name="寒山子",
+            identity_profiles=(
+                IdentityProfile(
+                    key="main",
+                    kind="main",
+                    my_name="寒山子",
+                    switch_target="主魂",
+                    display_name="主魂",
+                ),
+                IdentityProfile(
+                    key="avatar",
+                    kind="avatar",
+                    my_name="锐锋子",
+                    switch_target="锐锋子",
+                    display_name="锐锋子",
+                    game_id="7467781636",
+                ),
+            ),
+        )
+        plugin = AutoXinggongPlugin(config, logging.getLogger("test"))
+
+        invite = MessageContext(
+            chat_id=-100,
+            message_id=32,
+            reply_to_msg_id=123,
+            sender_id=999,
+            text="【周天星斗大阵-启】\n【星宫】弟子 7467781636 正在布设大阵，尚需1 位同门相助!",
+            ts=datetime.now(timezone.utc),
+            is_reply=False,
+            is_reply_to_me=False,
+        )
+        actions = await plugin.on_message(invite)
+
+        self.assertIsNone(actions)
+        self.assertIsNone(getattr(plugin, "_qizhen_last_invite_msg_id"))
+
+    async def test_qizhen_invite_from_other_player_still_triggers_assist(self) -> None:
+        plugin = AutoXinggongPlugin(_dummy_config(), logging.getLogger("test"))
+
+        invite = MessageContext(
+            chat_id=-100,
+            message_id=33,
+            reply_to_msg_id=123,
+            sender_id=999,
+            text="【周天星斗大阵-启】\n【星宫】弟子 @Other 正在布设大阵，尚需1 位同门相助!",
+            ts=datetime.now(timezone.utc),
+            is_reply=False,
+            is_reply_to_me=False,
+        )
+        actions = await plugin.on_message(invite)
+
+        assert actions is not None
+        self.assertEqual([action.text for action in actions], [".助阵"])
+
+    async def test_qizhen_success_matches_active_identity_token_without_invite_id(self) -> None:
+        base_config = _dummy_config(
+            my_name="寒山子",
+            identity_profiles=(
+                IdentityProfile(
+                    key="main",
+                    kind="main",
+                    my_name="寒山子",
+                    switch_target="主魂",
+                    display_name="主魂",
+                ),
+                IdentityProfile(
+                    key="avatar",
+                    kind="avatar",
+                    my_name="锐锋子",
+                    switch_target="锐锋子",
+                    display_name="锐锋子",
+                    game_id="7467781636",
+                ),
+            ),
+        )
+        plugin = AutoXinggongPlugin(base_config.apply_identity("avatar"), logging.getLogger("test"))
+        now = datetime.now()
+        setattr(plugin, "_cycle_date", plugin._cycle_date_for(now))  # type: ignore[attr-defined]
+        setattr(plugin, "_qizhen_pending_slot", 1)
+
+        success = MessageContext(
+            chat_id=-100,
+            message_id=34,
+            reply_to_msg_id=123,
+            sender_id=999,
+            text="【周天星斗大阵-成】锐锋子 星光汇聚，大阵已成!",
+            ts=datetime.now(timezone.utc),
+            is_reply=False,
+            is_reply_to_me=False,
+        )
+        await plugin.on_message(success)
+
         self.assertIsNotNone(getattr(plugin, "_qizhen_first_success_at"))
 
     async def test_qizhen_cooldown_reply_updates_blocked_until(self) -> None:

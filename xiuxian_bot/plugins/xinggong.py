@@ -224,6 +224,36 @@ class AutoXinggongPlugin:
             return ""
         return name if name.startswith("@") else f"@{name}"
 
+    def _identity_match_tokens(self, identity) -> tuple[str, ...]:  # type: ignore[no-untyped-def]
+        tokens: list[str] = []
+        for value in (
+            identity.my_name,
+            identity.switch_target,
+            identity.display_name,
+            identity.game_id,
+            identity.tg_username,
+        ):
+            normalized = normalize_match_text(value)
+            if normalized and normalized not in tokens:
+                tokens.append(normalized)
+        return tuple(tokens)
+
+    def _matches_identity_text(self, normalized_text: str, identity) -> bool:  # type: ignore[no-untyped-def]
+        return any(token and token in normalized_text for token in self._identity_match_tokens(identity))
+
+    def _matches_active_identity_text(self, normalized_text: str) -> bool:
+        my_tag = normalize_match_text(self._my_tag())
+        return (
+            bool(my_tag and my_tag in normalized_text)
+            or self._matches_identity_text(normalized_text, self._config.active_identity)
+        )
+
+    def _matches_any_configured_identity_text(self, normalized_text: str) -> bool:
+        return any(
+            self._matches_identity_text(normalized_text, identity)
+            for identity in self._config.identities
+        )
+
     def _normalize_username(self, raw: str) -> str:
         value = (raw or "").strip()
         if not value:
@@ -924,7 +954,7 @@ class AutoXinggongPlugin:
                 return None
 
         # ---- 周天星斗大阵：成功/邀请/助阵冷却 ----
-        my_tag = self._my_tag()
+        normalized_text = normalize_match_text(text)
         if "再次启阵" in text and "请在" in text:
             # e.g. 你刚刚参与过布阵... 请在 11小时7分钟39秒 后再次启阵。
             if not self._is_related_qizhen_feedback(ctx, now):
@@ -964,12 +994,14 @@ class AutoXinggongPlugin:
             return None
 
         if "周天星斗大阵-启" in text:
-            if my_tag and my_tag in text:
+            if self._matches_active_identity_text(normalized_text):
                 # This is the bot's invite message for our own ".启阵".
                 self._clear_qizhen_existing_invite_wait()
                 self._qizhen_last_invite_msg_id = ctx.message_id
                 self._qizhen_last_invite_slot = self._qizhen_pending_slot
                 self._save_state()
+            elif self._matches_any_configured_identity_text(normalized_text):
+                return None
             else:
                 # Others' invite -> try assist (no reply needed per your group rules).
                 if self._assist_blocked_until is not None and now < self._assist_blocked_until:
@@ -994,7 +1026,9 @@ class AutoXinggongPlugin:
 
         if "周天星斗大阵-成" in text or ("大阵已成" in text and "周天星斗大阵" in text):
             # Treat as success only if it matches our own invite edit, or explicitly mentions us.
-            is_mine = (self._qizhen_last_invite_msg_id == ctx.message_id) or (my_tag and my_tag in text)
+            is_mine = (self._qizhen_last_invite_msg_id == ctx.message_id) or self._matches_active_identity_text(
+                normalized_text
+            )
             if is_mine and self._qizhen_pending_slot in (1, 2):
                 success_slot = self._qizhen_pending_slot
                 if success_slot == 1 and self._qizhen_first_success_at is None:
