@@ -1874,6 +1874,12 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                 web_admin_password="secret",
                 web_secret_key="secret-key",
                 default_account_name="default",
+                tg_api_id=10001,
+                tg_api_hash="hash",
+                game_chat_id=-100123,
+                topic_id=12345,
+                send_to_topic=True,
+                system_reply_source_usernames="hantianzunhl,other_source",
             )
             fake_manager = self._fake_manager_cls(Path(system_config.log_dir))
 
@@ -1901,15 +1907,9 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                             "/accounts/new",
                             data={
                                 "name": "bot-1",
-                                "tg_api_id": "10001",
-                                "tg_api_hash": "hash",
                                 "tg_session_name": "session-bot-1",
-                                "game_chat_id": "-100123",
-                                "topic_id": "12345",
                                 "my_name": "BotOne",
-                                "system_reply_source_usernames": "hantianzunhl,other_source",
                                 "active_identity_key": "ruifengzi",
-                                "send_to_topic": "on",
                                 "enable_message_archive": "on",
                                 "enable_biguan": "on",
                                 "switch_command_template": ".切换 {target}",
@@ -1991,20 +1991,30 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                             follow_redirects=False,
                         )
                         self.assertEqual(create_response.status_code, 303)
-                        self.assertEqual(create_response.headers["location"], "/accounts/1/tg-login")
+                        self.assertEqual(create_response.headers["location"], "/")
 
                         dashboard = await client.get("/")
                         self.assertEqual(dashboard.status_code, 200)
                         self.assertIn("bot-1", dashboard.text)
                         self.assertIn("锐锋子", dashboard.text)
-                        self.assertIn("TG 登录", dashboard.text)
+                        self.assertNotIn("/accounts/1/tg-login", dashboard.text)
+
+                        new_page = await client.get("/accounts/new")
+                        self.assertEqual(new_page.status_code, 200)
+                        self.assertIn("通过 TG 登录新增", new_page.text)
+                        self.assertNotIn("TG API ID", new_page.text)
+                        self.assertNotIn("群组 Chat ID", new_page.text)
+                        self.assertNotIn("话题 TOPIC_ID", new_page.text)
 
                         edit_page = await client.get("/accounts/1/edit")
                         self.assertEqual(edit_page.status_code, 200)
                         self.assertIn("编辑账号 #1", edit_page.text)
                         self.assertIn("凌霄宫", edit_page.text)
                         self.assertIn("自动引九天罡风", edit_page.text)
-                        self.assertIn("额外系统来源", edit_page.text)
+                        self.assertNotIn("额外系统来源", edit_page.text)
+                        self.assertNotIn("TG API ID", edit_page.text)
+                        self.assertNotIn("群组 Chat ID", edit_page.text)
+                        self.assertNotIn("话题 TOPIC_ID", edit_page.text)
                         self.assertIn("消息归档", edit_page.text)
                         self.assertIn("观星劫持", edit_page.text)
                         self.assertIn("身份配置", edit_page.text)
@@ -2014,6 +2024,11 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         stored = app.state.repository.get_account(1)
                         self.assertIsNotNone(stored)
                         assert stored is not None
+                        self.assertEqual(stored.config.tg_api_id, 10001)
+                        self.assertEqual(stored.config.tg_api_hash, "hash")
+                        self.assertEqual(stored.config.game_chat_id, -100123)
+                        self.assertEqual(stored.config.topic_id, 12345)
+                        self.assertEqual(stored.config.system_reply_source_usernames, "hantianzunhl,other_source")
                         self.assertTrue(stored.config.enable_message_archive)
                         self.assertEqual(stored.config.active_identity_key, "ruifengzi")
                         avatar = stored.config.identity_by_key("ruifengzi")
@@ -2036,39 +2051,53 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
 
     async def test_account_tg_login_flow(self) -> None:
         import httpx
+        from urllib.parse import parse_qs, urlparse
 
         from xiuxian_bot.tg_login import TGLoginResult
         from xiuxian_bot.web import create_app
 
         class FakeTGLoginService:
             def __init__(self) -> None:
-                self.sent_codes: list[tuple[str, str]] = []
-                self.code_checks: list[tuple[str, str, str]] = []
-                self.password_checks: list[tuple[str, str]] = []
+                self.sent_codes: list[tuple[int, str, str, str]] = []
+                self.code_checks: list[tuple[int, str, str, str]] = []
+                self.password_checks: list[tuple[int, str, str]] = []
 
-            async def send_code(self, *, config, session_name: str, phone: str) -> str:  # type: ignore[no-untyped-def]
-                _ = config
-                self.sent_codes.append((session_name, phone))
+            async def send_code(  # type: ignore[no-untyped-def]
+                self,
+                *,
+                api_id: int,
+                api_hash: str,
+                session_name: str,
+                phone: str,
+            ) -> str:
+                self.sent_codes.append((api_id, api_hash, session_name, phone))
                 return "phone-code-hash"
 
             async def sign_in_code(  # type: ignore[no-untyped-def]
                 self,
                 *,
-                config,
+                api_id: int,
+                api_hash: str,
                 session_name: str,
                 phone: str,
                 code: str,
                 phone_code_hash: str,
             ) -> TGLoginResult:
-                _ = config
-                self.code_checks.append((session_name, phone, f"{code}:{phone_code_hash}"))
+                _ = phone
+                self.code_checks.append((api_id, api_hash, session_name, f"{code}:{phone_code_hash}"))
                 if code == "22222":
                     return TGLoginResult(password_required=True)
                 return TGLoginResult(authorized=True)
 
-            async def sign_in_password(self, *, config, session_name: str, password: str) -> TGLoginResult:  # type: ignore[no-untyped-def]
-                _ = config
-                self.password_checks.append((session_name, password))
+            async def sign_in_password(  # type: ignore[no-untyped-def]
+                self,
+                *,
+                api_id: int,
+                api_hash: str,
+                session_name: str,
+                password: str,
+            ) -> TGLoginResult:
+                self.password_checks.append((api_id, api_hash, session_name, password))
                 return TGLoginResult(authorized=True)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2080,6 +2109,12 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                 web_admin_username="admin",
                 web_admin_password="secret",
                 web_secret_key="secret-key",
+                tg_api_id=10001,
+                tg_api_hash="shared-hash",
+                game_chat_id=-100123,
+                topic_id=12345,
+                send_to_topic=True,
+                system_reply_source_usernames="hantianzunhl,other_source",
             )
             fake_manager = self._fake_manager_cls(Path(system_config.log_dir))
 
@@ -2092,19 +2127,9 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
             ):
                 app = create_app()
                 async with app.router.lifespan_context(app):
-                    record = app.state.repository.create_account(
-                        "alpha",
-                        _dummy_config(
-                            account_name="alpha",
-                            tg_session_name="alpha-session",
-                            tg_api_id=10001,
-                            tg_api_hash="hash",
-                        ),
-                        enabled=False,
-                    )
                     transport = httpx.ASGITransport(app=app)
                     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-                        response = await client.get(f"/accounts/{record.id}/tg-login", follow_redirects=False)
+                        response = await client.get("/accounts/new/tg-login", follow_redirects=False)
                         self.assertEqual(response.status_code, 303)
                         self.assertEqual(response.headers["location"], "/login")
 
@@ -2113,65 +2138,96 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                             data={"username": "admin", "password": "secret"},
                             follow_redirects=False,
                         )
-                        page = await client.get(f"/accounts/{record.id}/tg-login")
+                        page = await client.get("/accounts/new/tg-login")
                         self.assertEqual(page.status_code, 200)
-                        self.assertIn("TG 登录", page.text)
+                        self.assertIn("新增 TG 账号", page.text)
                         self.assertIn("发送验证码", page.text)
+                        self.assertNotIn("TG API ID", page.text)
+                        self.assertNotIn("群组 Chat ID", page.text)
+                        self.assertNotIn("话题 TOPIC_ID", page.text)
 
                         send_response = await client.post(
-                            f"/accounts/{record.id}/tg-login/send-code",
-                            data={"phone": "+15550001111"},
+                            "/accounts/new/tg-login/send-code",
+                            data={
+                                "account_name": "alpha",
+                                "tg_session_name": "alpha-session",
+                                "phone": "+15550001111",
+                            },
                             follow_redirects=False,
                         )
                         self.assertEqual(send_response.status_code, 303)
-                        self.assertEqual(
-                            send_response.headers["location"],
-                            f"/accounts/{record.id}/tg-login?step=code",
-                        )
+                        parsed = urlparse(send_response.headers["location"])
+                        self.assertEqual(parsed.path, "/accounts/new/tg-login")
+                        query = parse_qs(parsed.query)
+                        flow_id = query["flow_id"][0]
+                        self.assertEqual(query["step"], ["code"])
+                        self.assertEqual(app.state.repository.count_accounts(), 0)
                         session_name = str(tmp_path / "sessions" / "alpha-session")
-                        self.assertEqual(app.state.tg_login_service.sent_codes, [(session_name, "+15550001111")])
+                        self.assertEqual(
+                            app.state.tg_login_service.sent_codes,
+                            [(10001, "shared-hash", session_name, "+15550001111")],
+                        )
 
                         code_response = await client.post(
-                            f"/accounts/{record.id}/tg-login/verify-code",
-                            data={"code": "22222"},
+                            "/accounts/new/tg-login/verify-code",
+                            data={"flow_id": flow_id, "code": "22222"},
                             follow_redirects=False,
                         )
                         self.assertEqual(code_response.status_code, 303)
-                        self.assertEqual(
-                            code_response.headers["location"],
-                            f"/accounts/{record.id}/tg-login?step=password",
-                        )
+                        parsed = urlparse(code_response.headers["location"])
+                        self.assertEqual(parsed.path, "/accounts/new/tg-login")
+                        self.assertEqual(parse_qs(parsed.query)["step"], ["password"])
                         self.assertEqual(
                             app.state.tg_login_service.code_checks,
-                            [(session_name, "+15550001111", "22222:phone-code-hash")],
+                            [(10001, "shared-hash", session_name, "22222:phone-code-hash")],
                         )
 
                         password_response = await client.post(
-                            f"/accounts/{record.id}/tg-login/verify-password",
-                            data={"password": "2fa-secret"},
+                            "/accounts/new/tg-login/verify-password",
+                            data={"flow_id": flow_id, "password": "2fa-secret"},
                             follow_redirects=False,
                         )
                         self.assertEqual(password_response.status_code, 303)
-                        self.assertEqual(password_response.headers["location"], "/")
+                        self.assertEqual(password_response.headers["location"], "/accounts/1/edit")
                         self.assertEqual(
                             app.state.tg_login_service.password_checks,
-                            [(session_name, "2fa-secret")],
+                            [(10001, "shared-hash", session_name, "2fa-secret")],
                         )
-                        self.assertNotIn(record.id, app.state.tg_login_sessions)
+                        self.assertNotIn(flow_id, app.state.tg_login_sessions)
+                        created = app.state.repository.get_account(1)
+                        self.assertIsNotNone(created)
+                        assert created is not None
+                        self.assertFalse(created.enabled)
+                        self.assertEqual(created.name, "alpha")
+                        self.assertEqual(created.config.tg_session_name, "alpha-session")
+                        self.assertEqual(created.config.tg_api_id, 10001)
+                        self.assertEqual(created.config.tg_api_hash, "shared-hash")
+                        self.assertEqual(created.config.game_chat_id, -100123)
+                        self.assertEqual(created.config.topic_id, 12345)
+                        self.assertEqual(created.config.system_reply_source_usernames, "hantianzunhl,other_source")
 
                         await client.post(
-                            f"/accounts/{record.id}/tg-login/send-code",
-                            data={"phone": "+15550002222"},
+                            "/accounts/new/tg-login/send-code",
+                            data={
+                                "account_name": "beta",
+                                "tg_session_name": "beta-session",
+                                "phone": "+15550002222",
+                            },
                             follow_redirects=False,
                         )
+                        beta_flow_id = next(
+                            key
+                            for key, state in app.state.tg_login_sessions.items()
+                            if state.account_name == "beta"
+                        )
                         success_response = await client.post(
-                            f"/accounts/{record.id}/tg-login/verify-code",
-                            data={"code": "11111"},
+                            "/accounts/new/tg-login/verify-code",
+                            data={"flow_id": beta_flow_id, "code": "11111"},
                             follow_redirects=False,
                         )
                         self.assertEqual(success_response.status_code, 303)
-                        self.assertEqual(success_response.headers["location"], "/")
-                        self.assertNotIn(record.id, app.state.tg_login_sessions)
+                        self.assertEqual(success_response.headers["location"], "/accounts/2/edit")
+                        self.assertNotIn(beta_flow_id, app.state.tg_login_sessions)
 
     async def test_healthz_returns_ok_without_auth(self) -> None:
         import httpx

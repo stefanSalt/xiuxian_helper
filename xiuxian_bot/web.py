@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import json
 import logging
+import secrets
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -33,14 +34,15 @@ _MESSAGE_ARCHIVE_MAINTENANCE_INTERVAL_SECONDS = 24 * 60 * 60
 
 @dataclass
 class _TGLoginSession:
-    account_id: int
+    flow_id: str
+    account_name: str
+    tg_session_name: str
+    resolved_session_name: str
     phone: str
     phone_code_hash: str
-    session_name: str
     step: str = "code"
 
 CHECKBOX_FIELDS = {
-    "send_to_topic",
     "dry_run",
     "enable_message_archive",
     "enable_biguan",
@@ -86,15 +88,9 @@ FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
         "账号基础",
         [
             {"name": "name", "label": "账号名称", "type": "text"},
-            {"name": "tg_api_id", "label": "TG API ID", "type": "number"},
-            {"name": "tg_api_hash", "label": "TG API HASH", "type": "text"},
             {"name": "tg_session_name", "label": "Session 名称", "type": "text"},
-            {"name": "game_chat_id", "label": "群组 Chat ID", "type": "number"},
-            {"name": "topic_id", "label": "话题 TOPIC_ID", "type": "number"},
             {"name": "my_name", "label": "游戏名 / @名", "type": "text"},
-            {"name": "system_reply_source_usernames", "label": "额外系统来源(username逗号分隔)", "type": "text"},
             {"name": "active_identity_key", "label": "当前激活身份 key", "type": "text"},
-            {"name": "send_to_topic", "label": "发送到指定话题", "type": "checkbox"},
             {"name": "enabled", "label": "保存后自动启用", "type": "checkbox"},
             {"name": "dry_run", "label": "Dry Run", "type": "checkbox"},
             {"name": "enable_message_archive", "label": "消息归档", "type": "checkbox"},
@@ -248,15 +244,15 @@ FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
 def _template_values_for_new(system_config: SystemConfig) -> dict[str, Any]:
     return {
         "name": "",
-        "tg_api_id": "",
-        "tg_api_hash": "",
+        "tg_api_id": system_config.tg_api_id,
+        "tg_api_hash": system_config.tg_api_hash,
         "tg_session_name": "",
-        "game_chat_id": "",
-        "topic_id": "",
+        "game_chat_id": system_config.game_chat_id,
+        "topic_id": system_config.topic_id,
         "my_name": "",
-        "system_reply_source_usernames": "hantianzunhl",
+        "system_reply_source_usernames": system_config.system_reply_source_usernames,
         "active_identity_key": "main",
-        "send_to_topic": True,
+        "send_to_topic": system_config.send_to_topic,
         "enabled": True,
         "dry_run": False,
         "enable_message_archive": True,
@@ -457,6 +453,15 @@ def _template_values_from_form(form) -> dict[str, Any]:
     return values
 
 
+def _inject_shared_config(raw: dict[str, Any], system_config: SystemConfig) -> None:
+    raw["tg_api_id"] = system_config.tg_api_id
+    raw["tg_api_hash"] = system_config.tg_api_hash
+    raw["game_chat_id"] = system_config.game_chat_id
+    raw["topic_id"] = system_config.topic_id
+    raw["send_to_topic"] = system_config.send_to_topic
+    raw["system_reply_source_usernames"] = system_config.system_reply_source_usernames
+
+
 def _build_config_from_form(form, system_config: SystemConfig) -> tuple[str, bool, Config]:
     raw: dict[str, Any] = {}
     for section in FORM_SECTIONS:
@@ -473,6 +478,7 @@ def _build_config_from_form(form, system_config: SystemConfig) -> tuple[str, boo
     raw["account_name"] = name or system_config.default_account_name
     raw["account_id"] = ""
     raw["identity_profiles"] = identity_profiles
+    _inject_shared_config(raw, system_config)
     config = Config.from_mapping(raw)
     return name, enabled, config
 
@@ -930,20 +936,28 @@ def create_app() -> FastAPI:
     def _render_tg_login_page(
         request: Request,
         *,
-        account,
         step: str = "phone",
+        flow_id: str = "",
+        values: dict[str, Any] | None = None,
         error: str = "",
         message: str = "",
         status_code: int = 200,
     ) -> HTMLResponse:
-        login_state = request.app.state.tg_login_sessions.get(account.id)
+        login_state = request.app.state.tg_login_sessions.get(flow_id) if flow_id else None
+        if values is None:
+            values = {
+                "account_name": login_state.account_name if login_state else "",
+                "tg_session_name": login_state.tg_session_name if login_state else "",
+                "phone": login_state.phone if login_state else "",
+            }
         return templates.TemplateResponse(
             request,
             "tg_login.html",
             _ctx(
                 request,
-                account=account,
                 step=step,
+                flow_id=flow_id,
+                values=values,
                 login_state=login_state,
                 error=error,
                 message=message,
@@ -951,11 +965,38 @@ def create_app() -> FastAPI:
             status_code=status_code,
         )
 
-    def _resolve_tg_login_session_name(system_config: SystemConfig, account) -> str:
-        session_name = account.config.tg_session_name.strip()
+    def _resolve_tg_login_session_name(system_config: SystemConfig, session_name: str) -> str:
+        session_name = session_name.strip()
         if not session_name:
             raise ValueError("Session 名称不能为空")
         return _resolve_session_name(system_config, session_name)
+
+    def _validate_tg_login_shared_config(system_config: SystemConfig) -> None:
+        missing: list[str] = []
+        if system_config.tg_api_id <= 0:
+            missing.append("TG_API_ID")
+        if not system_config.tg_api_hash.strip():
+            missing.append("TG_API_HASH")
+        if system_config.game_chat_id == 0:
+            missing.append("GAME_CHAT_ID")
+        if system_config.topic_id == 0:
+            missing.append("TOPIC_ID")
+        if missing:
+            raise ValueError("请先配置应用级共享参数: " + ", ".join(missing))
+
+    def _build_tg_login_account_config(
+        system_config: SystemConfig,
+        login_state: _TGLoginSession,
+    ) -> Config:
+        raw = _template_values_for_new(system_config)
+        raw["name"] = login_state.account_name
+        raw["tg_session_name"] = login_state.tg_session_name
+        raw["account_name"] = login_state.account_name
+        raw["account_id"] = ""
+        raw["state_db_path"] = system_config.app_db_path
+        raw["enabled"] = False
+        _inject_shared_config(raw, system_config)
+        return Config.from_mapping(raw)
 
     @app.get("/messages", response_class=HTMLResponse)
     async def message_archive(request: Request):
@@ -981,6 +1022,7 @@ def create_app() -> FastAPI:
                 action="/accounts/new",
                 values=_template_values_for_new(system_config),
                 form_sections=FORM_SECTIONS,
+                tg_login_entry_url="/accounts/new/tg-login",
                 error="",
             ),
         )
@@ -996,7 +1038,7 @@ def create_app() -> FastAPI:
         try:
             name, enabled, config = _build_config_from_form(form, system_config)
             record = repository.create_account(name, config, enabled=enabled)
-            return RedirectResponse(f"/accounts/{record.id}/tg-login", status_code=303)
+            return RedirectResponse("/", status_code=303)
         except Exception as exc:
             return templates.TemplateResponse(
                 request,
@@ -1007,165 +1049,181 @@ def create_app() -> FastAPI:
                     action="/accounts/new",
                     values=values,
                     form_sections=FORM_SECTIONS,
+                    tg_login_entry_url="/accounts/new/tg-login",
                     error=str(exc),
                 ),
                 status_code=400,
             )
 
-    @app.get("/accounts/{account_id}/tg-login", response_class=HTMLResponse)
-    async def account_tg_login(request: Request, account_id: int):
+    @app.get("/accounts/new/tg-login", response_class=HTMLResponse)
+    async def account_new_tg_login(request: Request):
         system_config: SystemConfig = request.app.state.system_config
         if not _is_authenticated(request, system_config):
             return _redirect_login()
-        repository: AccountRepository = request.app.state.repository
-        record = repository.get_account(account_id)
-        if record is None:
-            return RedirectResponse("/", status_code=303)
+        flow_id = (request.query_params.get("flow_id") or "").strip()
         requested_step = (request.query_params.get("step") or "").strip()
-        login_state = request.app.state.tg_login_sessions.get(account_id)
+        login_state = request.app.state.tg_login_sessions.get(flow_id) if flow_id else None
         step = requested_step or (login_state.step if login_state is not None else "phone")
         if step not in {"phone", "code", "password"}:
             step = "phone"
         if step in {"code", "password"} and login_state is None:
             step = "phone"
-        return _render_tg_login_page(request, account=record, step=step)
+            flow_id = ""
+        return _render_tg_login_page(request, step=step, flow_id=flow_id)
 
-    @app.post("/accounts/{account_id}/tg-login/send-code")
-    async def account_tg_login_send_code(request: Request, account_id: int):
+    @app.post("/accounts/new/tg-login/send-code")
+    async def account_new_tg_login_send_code(request: Request):
         system_config: SystemConfig = request.app.state.system_config
         if not _is_authenticated(request, system_config):
             return _redirect_login()
         repository: AccountRepository = request.app.state.repository
-        record = repository.get_account(account_id)
-        if record is None:
-            return RedirectResponse("/", status_code=303)
         form = await request.form()
+        account_name = (form.get("account_name") or "").strip()
+        tg_session_name = (form.get("tg_session_name") or "").strip()
         phone = (form.get("phone") or "").strip()
-        if not phone:
-            return _render_tg_login_page(
-                request,
-                account=record,
-                step="phone",
-                error="手机号不能为空",
-                status_code=400,
-            )
+        values = {
+            "account_name": account_name,
+            "tg_session_name": tg_session_name,
+            "phone": phone,
+        }
         try:
-            session_name = _resolve_tg_login_session_name(system_config, record)
+            if not account_name:
+                raise ValueError("账号名称不能为空")
+            if any(record.name == account_name for record in repository.list_accounts()):
+                raise ValueError(f"账号名称已存在: {account_name}")
+            if not phone:
+                raise ValueError("手机号不能为空")
+            _validate_tg_login_shared_config(system_config)
+            resolved_session_name = _resolve_tg_login_session_name(system_config, tg_session_name)
             service: TGLoginService = request.app.state.tg_login_service
             phone_code_hash = await service.send_code(
-                config=record.config,
-                session_name=session_name,
+                api_id=system_config.tg_api_id,
+                api_hash=system_config.tg_api_hash,
+                session_name=resolved_session_name,
                 phone=phone,
             )
-            request.app.state.tg_login_sessions[account_id] = _TGLoginSession(
-                account_id=account_id,
+            flow_id = secrets.token_urlsafe(16)
+            request.app.state.tg_login_sessions[flow_id] = _TGLoginSession(
+                flow_id=flow_id,
+                account_name=account_name,
+                tg_session_name=tg_session_name,
+                resolved_session_name=resolved_session_name,
                 phone=phone,
                 phone_code_hash=phone_code_hash,
-                session_name=session_name,
             )
-            return RedirectResponse(f"/accounts/{account_id}/tg-login?step=code", status_code=303)
+            return RedirectResponse(
+                f"/accounts/new/tg-login?flow_id={flow_id}&step=code",
+                status_code=303,
+            )
         except Exception as exc:
             return _render_tg_login_page(
                 request,
-                account=record,
                 step="phone",
+                values=values,
                 error=str(exc),
                 status_code=400,
             )
 
-    @app.post("/accounts/{account_id}/tg-login/verify-code")
-    async def account_tg_login_verify_code(request: Request, account_id: int):
+    @app.post("/accounts/new/tg-login/verify-code")
+    async def account_new_tg_login_verify_code(request: Request):
         system_config: SystemConfig = request.app.state.system_config
         if not _is_authenticated(request, system_config):
             return _redirect_login()
         repository: AccountRepository = request.app.state.repository
-        record = repository.get_account(account_id)
-        if record is None:
-            return RedirectResponse("/", status_code=303)
-        login_state = request.app.state.tg_login_sessions.get(account_id)
+        form = await request.form()
+        flow_id = (form.get("flow_id") or "").strip()
+        login_state = request.app.state.tg_login_sessions.get(flow_id) if flow_id else None
         if login_state is None:
             return _render_tg_login_page(
                 request,
-                account=record,
                 step="phone",
                 error="请先发送验证码",
                 status_code=400,
             )
-        form = await request.form()
         code = (form.get("code") or "").strip()
         if not code:
             return _render_tg_login_page(
                 request,
-                account=record,
                 step="code",
+                flow_id=flow_id,
                 error="验证码不能为空",
                 status_code=400,
             )
         try:
             service: TGLoginService = request.app.state.tg_login_service
             result = await service.sign_in_code(
-                config=record.config,
-                session_name=login_state.session_name,
+                api_id=system_config.tg_api_id,
+                api_hash=system_config.tg_api_hash,
+                session_name=login_state.resolved_session_name,
                 phone=login_state.phone,
                 code=code,
                 phone_code_hash=login_state.phone_code_hash,
             )
             if result.password_required:
                 login_state.step = "password"
-                return RedirectResponse(f"/accounts/{account_id}/tg-login?step=password", status_code=303)
-            request.app.state.tg_login_sessions.pop(account_id, None)
-            return RedirectResponse("/", status_code=303)
+                return RedirectResponse(
+                    f"/accounts/new/tg-login?flow_id={flow_id}&step=password",
+                    status_code=303,
+                )
+            if not result.authorized:
+                raise ValueError("TG 登录未完成")
+            config = _build_tg_login_account_config(system_config, login_state)
+            record = repository.create_account(login_state.account_name, config, enabled=False)
+            request.app.state.tg_login_sessions.pop(flow_id, None)
+            return RedirectResponse(f"/accounts/{record.id}/edit", status_code=303)
         except Exception as exc:
             return _render_tg_login_page(
                 request,
-                account=record,
                 step="code",
+                flow_id=flow_id,
                 error=str(exc),
                 status_code=400,
             )
 
-    @app.post("/accounts/{account_id}/tg-login/verify-password")
-    async def account_tg_login_verify_password(request: Request, account_id: int):
+    @app.post("/accounts/new/tg-login/verify-password")
+    async def account_new_tg_login_verify_password(request: Request):
         system_config: SystemConfig = request.app.state.system_config
         if not _is_authenticated(request, system_config):
             return _redirect_login()
         repository: AccountRepository = request.app.state.repository
-        record = repository.get_account(account_id)
-        if record is None:
-            return RedirectResponse("/", status_code=303)
-        login_state = request.app.state.tg_login_sessions.get(account_id)
+        form = await request.form()
+        flow_id = (form.get("flow_id") or "").strip()
+        login_state = request.app.state.tg_login_sessions.get(flow_id) if flow_id else None
         if login_state is None:
             return _render_tg_login_page(
                 request,
-                account=record,
                 step="phone",
                 error="请先发送验证码",
                 status_code=400,
             )
-        form = await request.form()
         password = (form.get("password") or "").strip()
         if not password:
             return _render_tg_login_page(
                 request,
-                account=record,
                 step="password",
+                flow_id=flow_id,
                 error="两步验证密码不能为空",
                 status_code=400,
             )
         try:
             service: TGLoginService = request.app.state.tg_login_service
-            await service.sign_in_password(
-                config=record.config,
-                session_name=login_state.session_name,
+            result = await service.sign_in_password(
+                api_id=system_config.tg_api_id,
+                api_hash=system_config.tg_api_hash,
+                session_name=login_state.resolved_session_name,
                 password=password,
             )
-            request.app.state.tg_login_sessions.pop(account_id, None)
-            return RedirectResponse("/", status_code=303)
+            if not result.authorized:
+                raise ValueError("TG 登录未完成")
+            config = _build_tg_login_account_config(system_config, login_state)
+            record = repository.create_account(login_state.account_name, config, enabled=False)
+            request.app.state.tg_login_sessions.pop(flow_id, None)
+            return RedirectResponse(f"/accounts/{record.id}/edit", status_code=303)
         except Exception as exc:
             return _render_tg_login_page(
                 request,
-                account=record,
                 step="password",
+                flow_id=flow_id,
                 error=str(exc),
                 status_code=400,
             )

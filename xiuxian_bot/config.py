@@ -201,6 +201,12 @@ class SystemConfig:
     log_dir: str = "logs"
     session_root_dir: str = ""
     default_account_name: str = "default"
+    tg_api_id: int = 0
+    tg_api_hash: str = ""
+    game_chat_id: int = 0
+    topic_id: int = 0
+    send_to_topic: bool = True
+    system_reply_source_usernames: str = "hantianzunhl"
     message_archive_cleanup_enabled: bool = True
     message_archive_retention_days: int = 30
     message_archive_vacuum_enabled: bool = True
@@ -225,6 +231,15 @@ class SystemConfig:
             log_dir=_get_env_str("LOG_DIR", default="logs"),
             session_root_dir=_get_env_str("SESSION_ROOT_DIR", default=""),
             default_account_name=_get_env_str("DEFAULT_ACCOUNT_NAME", default="default"),
+            tg_api_id=_get_env_int("TG_API_ID", default=0),
+            tg_api_hash=_get_env_str("TG_API_HASH", default=""),
+            game_chat_id=_get_env_int("GAME_CHAT_ID", default=0),
+            topic_id=_get_env_int("TOPIC_ID", default=0),
+            send_to_topic=_get_env_bool("SEND_TO_TOPIC", default=True),
+            system_reply_source_usernames=_get_env_str(
+                "SYSTEM_REPLY_SOURCE_USERNAMES",
+                default="hantianzunhl",
+            ),
             message_archive_cleanup_enabled=_get_env_bool(
                 "MESSAGE_ARCHIVE_CLEANUP_ENABLED",
                 default=True,

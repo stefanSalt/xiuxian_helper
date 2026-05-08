@@ -5,8 +5,6 @@ from dataclasses import dataclass
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
 
-from .config import Config
-
 
 @dataclass(frozen=True)
 class TGLoginResult:
@@ -15,8 +13,15 @@ class TGLoginResult:
 
 
 class TGLoginService:
-    async def send_code(self, *, config: Config, session_name: str, phone: str) -> str:
-        client = TelegramClient(session_name, config.tg_api_id, config.tg_api_hash)
+    async def send_code(
+        self,
+        *,
+        api_id: int,
+        api_hash: str,
+        session_name: str,
+        phone: str,
+    ) -> str:
+        client = TelegramClient(session_name, api_id, api_hash)
         await client.connect()
         try:
             sent = await client.send_code_request(phone)
@@ -27,13 +32,14 @@ class TGLoginService:
     async def sign_in_code(
         self,
         *,
-        config: Config,
+        api_id: int,
+        api_hash: str,
         session_name: str,
         phone: str,
         code: str,
         phone_code_hash: str,
     ) -> TGLoginResult:
-        client = TelegramClient(session_name, config.tg_api_id, config.tg_api_hash)
+        client = TelegramClient(session_name, api_id, api_hash)
         await client.connect()
         try:
             try:
@@ -51,11 +57,12 @@ class TGLoginService:
     async def sign_in_password(
         self,
         *,
-        config: Config,
+        api_id: int,
+        api_hash: str,
         session_name: str,
         password: str,
     ) -> TGLoginResult:
-        client = TelegramClient(session_name, config.tg_api_id, config.tg_api_hash)
+        client = TelegramClient(session_name, api_id, api_hash)
         await client.connect()
         try:
             await client.sign_in(password=password)
