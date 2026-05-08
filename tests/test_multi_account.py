@@ -1991,12 +1991,13 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                             follow_redirects=False,
                         )
                         self.assertEqual(create_response.status_code, 303)
-                        self.assertEqual(create_response.headers["location"], "/")
+                        self.assertEqual(create_response.headers["location"], "/accounts/1/tg-login")
 
                         dashboard = await client.get("/")
                         self.assertEqual(dashboard.status_code, 200)
                         self.assertIn("bot-1", dashboard.text)
                         self.assertIn("锐锋子", dashboard.text)
+                        self.assertIn("TG 登录", dashboard.text)
 
                         edit_page = await client.get("/accounts/1/edit")
                         self.assertEqual(edit_page.status_code, 200)
@@ -2032,6 +2033,145 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         logs_page = await client.get("/accounts/1/logs")
                         self.assertEqual(logs_page.status_code, 200)
                         self.assertIn("账号日志 #1 - bot-1", logs_page.text)
+
+    async def test_account_tg_login_flow(self) -> None:
+        import httpx
+
+        from xiuxian_bot.tg_login import TGLoginResult
+        from xiuxian_bot.web import create_app
+
+        class FakeTGLoginService:
+            def __init__(self) -> None:
+                self.sent_codes: list[tuple[str, str]] = []
+                self.code_checks: list[tuple[str, str, str]] = []
+                self.password_checks: list[tuple[str, str]] = []
+
+            async def send_code(self, *, config, session_name: str, phone: str) -> str:  # type: ignore[no-untyped-def]
+                _ = config
+                self.sent_codes.append((session_name, phone))
+                return "phone-code-hash"
+
+            async def sign_in_code(  # type: ignore[no-untyped-def]
+                self,
+                *,
+                config,
+                session_name: str,
+                phone: str,
+                code: str,
+                phone_code_hash: str,
+            ) -> TGLoginResult:
+                _ = config
+                self.code_checks.append((session_name, phone, f"{code}:{phone_code_hash}"))
+                if code == "22222":
+                    return TGLoginResult(password_required=True)
+                return TGLoginResult(authorized=True)
+
+            async def sign_in_password(self, *, config, session_name: str, password: str) -> TGLoginResult:  # type: ignore[no-untyped-def]
+                _ = config
+                self.password_checks.append((session_name, password))
+                return TGLoginResult(authorized=True)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            system_config = SystemConfig(
+                app_db_path=str(tmp_path / "app.sqlite3"),
+                log_dir=str(tmp_path / "logs"),
+                session_root_dir=str(tmp_path / "sessions"),
+                web_admin_username="admin",
+                web_admin_password="secret",
+                web_secret_key="secret-key",
+            )
+            fake_manager = self._fake_manager_cls(Path(system_config.log_dir))
+
+            with patch("xiuxian_bot.web.SystemConfig.load", return_value=system_config), patch(
+                "xiuxian_bot.web.AccountRepository.ensure_legacy_account",
+                return_value=None,
+            ), patch("xiuxian_bot.web.RunnerManager", fake_manager), patch(
+                "xiuxian_bot.web.TGLoginService",
+                FakeTGLoginService,
+            ):
+                app = create_app()
+                async with app.router.lifespan_context(app):
+                    record = app.state.repository.create_account(
+                        "alpha",
+                        _dummy_config(
+                            account_name="alpha",
+                            tg_session_name="alpha-session",
+                            tg_api_id=10001,
+                            tg_api_hash="hash",
+                        ),
+                        enabled=False,
+                    )
+                    transport = httpx.ASGITransport(app=app)
+                    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                        response = await client.get(f"/accounts/{record.id}/tg-login", follow_redirects=False)
+                        self.assertEqual(response.status_code, 303)
+                        self.assertEqual(response.headers["location"], "/login")
+
+                        await client.post(
+                            "/login",
+                            data={"username": "admin", "password": "secret"},
+                            follow_redirects=False,
+                        )
+                        page = await client.get(f"/accounts/{record.id}/tg-login")
+                        self.assertEqual(page.status_code, 200)
+                        self.assertIn("TG 登录", page.text)
+                        self.assertIn("发送验证码", page.text)
+
+                        send_response = await client.post(
+                            f"/accounts/{record.id}/tg-login/send-code",
+                            data={"phone": "+15550001111"},
+                            follow_redirects=False,
+                        )
+                        self.assertEqual(send_response.status_code, 303)
+                        self.assertEqual(
+                            send_response.headers["location"],
+                            f"/accounts/{record.id}/tg-login?step=code",
+                        )
+                        session_name = str(tmp_path / "sessions" / "alpha-session")
+                        self.assertEqual(app.state.tg_login_service.sent_codes, [(session_name, "+15550001111")])
+
+                        code_response = await client.post(
+                            f"/accounts/{record.id}/tg-login/verify-code",
+                            data={"code": "22222"},
+                            follow_redirects=False,
+                        )
+                        self.assertEqual(code_response.status_code, 303)
+                        self.assertEqual(
+                            code_response.headers["location"],
+                            f"/accounts/{record.id}/tg-login?step=password",
+                        )
+                        self.assertEqual(
+                            app.state.tg_login_service.code_checks,
+                            [(session_name, "+15550001111", "22222:phone-code-hash")],
+                        )
+
+                        password_response = await client.post(
+                            f"/accounts/{record.id}/tg-login/verify-password",
+                            data={"password": "2fa-secret"},
+                            follow_redirects=False,
+                        )
+                        self.assertEqual(password_response.status_code, 303)
+                        self.assertEqual(password_response.headers["location"], "/")
+                        self.assertEqual(
+                            app.state.tg_login_service.password_checks,
+                            [(session_name, "2fa-secret")],
+                        )
+                        self.assertNotIn(record.id, app.state.tg_login_sessions)
+
+                        await client.post(
+                            f"/accounts/{record.id}/tg-login/send-code",
+                            data={"phone": "+15550002222"},
+                            follow_redirects=False,
+                        )
+                        success_response = await client.post(
+                            f"/accounts/{record.id}/tg-login/verify-code",
+                            data={"code": "11111"},
+                            follow_redirects=False,
+                        )
+                        self.assertEqual(success_response.status_code, 303)
+                        self.assertEqual(success_response.headers["location"], "/")
+                        self.assertNotIn(record.id, app.state.tg_login_sessions)
 
     async def test_healthz_returns_ok_without_auth(self) -> None:
         import httpx

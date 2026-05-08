@@ -5,6 +5,7 @@ import hmac
 import json
 import logging
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
@@ -21,12 +22,22 @@ from .config import Config, SystemConfig
 from .core.account_repository import AccountRepository
 from .core.message_archive_repository import MessageArchiveRepository
 from .core.state_store import SQLiteStateStore
-from .runtime import RunnerManager, setup_root_logger
+from .runtime import RunnerManager, _resolve_session_name, setup_root_logger
+from .tg_login import TGLoginService
 
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 _MESSAGE_ARCHIVE_MAINTENANCE_INTERVAL_SECONDS = 24 * 60 * 60
+
+
+@dataclass
+class _TGLoginSession:
+    account_id: int
+    phone: str
+    phone_code_hash: str
+    session_name: str
+    step: str = "code"
 
 CHECKBOX_FIELDS = {
     "send_to_topic",
@@ -728,6 +739,8 @@ def create_app() -> FastAPI:
         app.state.repository = repository
         app.state.message_archive_repository = message_archive_repository
         app.state.runner_manager = manager
+        app.state.tg_login_service = TGLoginService()
+        app.state.tg_login_sessions = {}
         if system_config.message_archive_cleanup_enabled:
             cleanup_task = asyncio.create_task(
                 _message_archive_maintenance_loop(
@@ -914,6 +927,36 @@ def create_app() -> FastAPI:
             ),
         )
 
+    def _render_tg_login_page(
+        request: Request,
+        *,
+        account,
+        step: str = "phone",
+        error: str = "",
+        message: str = "",
+        status_code: int = 200,
+    ) -> HTMLResponse:
+        login_state = request.app.state.tg_login_sessions.get(account.id)
+        return templates.TemplateResponse(
+            request,
+            "tg_login.html",
+            _ctx(
+                request,
+                account=account,
+                step=step,
+                login_state=login_state,
+                error=error,
+                message=message,
+            ),
+            status_code=status_code,
+        )
+
+    def _resolve_tg_login_session_name(system_config: SystemConfig, account) -> str:
+        session_name = account.config.tg_session_name.strip()
+        if not session_name:
+            raise ValueError("Session 名称不能为空")
+        return _resolve_session_name(system_config, session_name)
+
     @app.get("/messages", response_class=HTMLResponse)
     async def message_archive(request: Request):
         system_config: SystemConfig = request.app.state.system_config
@@ -948,15 +991,12 @@ def create_app() -> FastAPI:
         if not _is_authenticated(request, system_config):
             return _redirect_login()
         repository: AccountRepository = request.app.state.repository
-        manager: RunnerManager = request.app.state.runner_manager
         form = await request.form()
         values = _template_values_from_form(form)
         try:
             name, enabled, config = _build_config_from_form(form, system_config)
             record = repository.create_account(name, config, enabled=enabled)
-            if record.enabled:
-                await manager.start_account(record.id, respect_enabled=True)
-            return RedirectResponse("/", status_code=303)
+            return RedirectResponse(f"/accounts/{record.id}/tg-login", status_code=303)
         except Exception as exc:
             return templates.TemplateResponse(
                 request,
@@ -969,6 +1009,164 @@ def create_app() -> FastAPI:
                     form_sections=FORM_SECTIONS,
                     error=str(exc),
                 ),
+                status_code=400,
+            )
+
+    @app.get("/accounts/{account_id}/tg-login", response_class=HTMLResponse)
+    async def account_tg_login(request: Request, account_id: int):
+        system_config: SystemConfig = request.app.state.system_config
+        if not _is_authenticated(request, system_config):
+            return _redirect_login()
+        repository: AccountRepository = request.app.state.repository
+        record = repository.get_account(account_id)
+        if record is None:
+            return RedirectResponse("/", status_code=303)
+        requested_step = (request.query_params.get("step") or "").strip()
+        login_state = request.app.state.tg_login_sessions.get(account_id)
+        step = requested_step or (login_state.step if login_state is not None else "phone")
+        if step not in {"phone", "code", "password"}:
+            step = "phone"
+        if step in {"code", "password"} and login_state is None:
+            step = "phone"
+        return _render_tg_login_page(request, account=record, step=step)
+
+    @app.post("/accounts/{account_id}/tg-login/send-code")
+    async def account_tg_login_send_code(request: Request, account_id: int):
+        system_config: SystemConfig = request.app.state.system_config
+        if not _is_authenticated(request, system_config):
+            return _redirect_login()
+        repository: AccountRepository = request.app.state.repository
+        record = repository.get_account(account_id)
+        if record is None:
+            return RedirectResponse("/", status_code=303)
+        form = await request.form()
+        phone = (form.get("phone") or "").strip()
+        if not phone:
+            return _render_tg_login_page(
+                request,
+                account=record,
+                step="phone",
+                error="手机号不能为空",
+                status_code=400,
+            )
+        try:
+            session_name = _resolve_tg_login_session_name(system_config, record)
+            service: TGLoginService = request.app.state.tg_login_service
+            phone_code_hash = await service.send_code(
+                config=record.config,
+                session_name=session_name,
+                phone=phone,
+            )
+            request.app.state.tg_login_sessions[account_id] = _TGLoginSession(
+                account_id=account_id,
+                phone=phone,
+                phone_code_hash=phone_code_hash,
+                session_name=session_name,
+            )
+            return RedirectResponse(f"/accounts/{account_id}/tg-login?step=code", status_code=303)
+        except Exception as exc:
+            return _render_tg_login_page(
+                request,
+                account=record,
+                step="phone",
+                error=str(exc),
+                status_code=400,
+            )
+
+    @app.post("/accounts/{account_id}/tg-login/verify-code")
+    async def account_tg_login_verify_code(request: Request, account_id: int):
+        system_config: SystemConfig = request.app.state.system_config
+        if not _is_authenticated(request, system_config):
+            return _redirect_login()
+        repository: AccountRepository = request.app.state.repository
+        record = repository.get_account(account_id)
+        if record is None:
+            return RedirectResponse("/", status_code=303)
+        login_state = request.app.state.tg_login_sessions.get(account_id)
+        if login_state is None:
+            return _render_tg_login_page(
+                request,
+                account=record,
+                step="phone",
+                error="请先发送验证码",
+                status_code=400,
+            )
+        form = await request.form()
+        code = (form.get("code") or "").strip()
+        if not code:
+            return _render_tg_login_page(
+                request,
+                account=record,
+                step="code",
+                error="验证码不能为空",
+                status_code=400,
+            )
+        try:
+            service: TGLoginService = request.app.state.tg_login_service
+            result = await service.sign_in_code(
+                config=record.config,
+                session_name=login_state.session_name,
+                phone=login_state.phone,
+                code=code,
+                phone_code_hash=login_state.phone_code_hash,
+            )
+            if result.password_required:
+                login_state.step = "password"
+                return RedirectResponse(f"/accounts/{account_id}/tg-login?step=password", status_code=303)
+            request.app.state.tg_login_sessions.pop(account_id, None)
+            return RedirectResponse("/", status_code=303)
+        except Exception as exc:
+            return _render_tg_login_page(
+                request,
+                account=record,
+                step="code",
+                error=str(exc),
+                status_code=400,
+            )
+
+    @app.post("/accounts/{account_id}/tg-login/verify-password")
+    async def account_tg_login_verify_password(request: Request, account_id: int):
+        system_config: SystemConfig = request.app.state.system_config
+        if not _is_authenticated(request, system_config):
+            return _redirect_login()
+        repository: AccountRepository = request.app.state.repository
+        record = repository.get_account(account_id)
+        if record is None:
+            return RedirectResponse("/", status_code=303)
+        login_state = request.app.state.tg_login_sessions.get(account_id)
+        if login_state is None:
+            return _render_tg_login_page(
+                request,
+                account=record,
+                step="phone",
+                error="请先发送验证码",
+                status_code=400,
+            )
+        form = await request.form()
+        password = (form.get("password") or "").strip()
+        if not password:
+            return _render_tg_login_page(
+                request,
+                account=record,
+                step="password",
+                error="两步验证密码不能为空",
+                status_code=400,
+            )
+        try:
+            service: TGLoginService = request.app.state.tg_login_service
+            await service.sign_in_password(
+                config=record.config,
+                session_name=login_state.session_name,
+                password=password,
+            )
+            request.app.state.tg_login_sessions.pop(account_id, None)
+            return RedirectResponse("/", status_code=303)
+        except Exception as exc:
+            return _render_tg_login_page(
+                request,
+                account=record,
+                step="password",
+                error=str(exc),
                 status_code=400,
             )
 

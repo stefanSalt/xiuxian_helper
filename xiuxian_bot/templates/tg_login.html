@@ -1,0 +1,64 @@
+{% extends 'base.html' %}
+{% block title %}TG 登录{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>TG 登录 #{{ account.id }} - {{ account.name }}</h1>
+    <div class="actions">
+      <a href="/" class="btn btn-light">返回</a>
+      <a href="/accounts/{{ account.id }}/edit" class="btn btn-light">编辑账号</a>
+    </div>
+  </div>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  {% if message %}<p class="success">{{ message }}</p>{% endif %}
+  <div class="muted">Session：{{ account.config.tg_session_name }}</div>
+
+  {% if step == 'phone' %}
+  <form method="post" action="/accounts/{{ account.id }}/tg-login/send-code" class="stack-form">
+    <fieldset class="form-section">
+      <legend>发送验证码</legend>
+      <div class="grid grid-2">
+        <label class="field">
+          <span>手机号</span>
+          <input type="text" name="phone" value="{{ login_state.phone if login_state else '' }}" placeholder="+8613800000000">
+        </label>
+      </div>
+    </fieldset>
+    <div class="actions">
+      <button type="submit" class="btn">发送验证码</button>
+    </div>
+  </form>
+  {% elif step == 'code' %}
+  <form method="post" action="/accounts/{{ account.id }}/tg-login/verify-code" class="stack-form">
+    <fieldset class="form-section">
+      <legend>填写验证码</legend>
+      <div class="grid grid-2">
+        <label class="field">
+          <span>验证码</span>
+          <input type="text" name="code" autocomplete="one-time-code">
+        </label>
+      </div>
+    </fieldset>
+    <div class="actions">
+      <button type="submit" class="btn">提交验证码</button>
+      <a href="/accounts/{{ account.id }}/tg-login?step=phone" class="btn btn-light">重新发送</a>
+    </div>
+  </form>
+  {% elif step == 'password' %}
+  <form method="post" action="/accounts/{{ account.id }}/tg-login/verify-password" class="stack-form">
+    <fieldset class="form-section">
+      <legend>两步验证</legend>
+      <div class="grid grid-2">
+        <label class="field">
+          <span>2FA 密码</span>
+          <input type="password" name="password" autocomplete="current-password">
+        </label>
+      </div>
+    </fieldset>
+    <div class="actions">
+      <button type="submit" class="btn">完成登录</button>
+    </div>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}
