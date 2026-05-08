@@ -137,6 +137,41 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config.daily_bushi_interval_seconds, 120)
         self.assertEqual(config.daily_bushi_exchange_action, ".换取")
 
+    def test_from_mapping_accepts_wild_explore_fields(self) -> None:
+        config = Config.from_mapping(
+            {
+                "tg_api_id": "1",
+                "tg_api_hash": "hash",
+                "tg_session_name": "session",
+                "game_chat_id": "-100",
+                "topic_id": "123",
+                "my_name": "Me",
+                "enable_wild_explore": "true",
+                "wild_explore_interval_seconds": "7200",
+                "wild_explore_strategy": "均衡",
+                "wild_explore_repeat_delay_seconds": "6",
+            }
+        )
+
+        self.assertTrue(config.enable_wild_explore)
+        self.assertEqual(config.wild_explore_interval_seconds, 7200)
+        self.assertEqual(config.wild_explore_strategy, "均衡")
+        self.assertEqual(config.wild_explore_repeat_delay_seconds, 6)
+
+    def test_from_mapping_rejects_unknown_wild_explore_strategy(self) -> None:
+        with self.assertRaisesRegex(ValueError, "wild_explore_strategy"):
+            Config.from_mapping(
+                {
+                    "tg_api_id": "1",
+                    "tg_api_hash": "hash",
+                    "tg_session_name": "session",
+                    "game_chat_id": "-100",
+                    "topic_id": "123",
+                    "my_name": "Me",
+                    "wild_explore_strategy": "冒进",
+                }
+            )
+
     def test_from_mapping_accepts_fractional_xinggong_shift_advance_seconds(self) -> None:
         config = Config.from_mapping(
             {

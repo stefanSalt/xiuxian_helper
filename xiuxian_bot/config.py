@@ -316,6 +316,12 @@ class Config:
     daily_bushi_interval_seconds: int = 120
     daily_bushi_exchange_action: str = ".换取"
 
+    # Wild explore
+    enable_wild_explore: bool = False
+    wild_explore_interval_seconds: int = 7200
+    wild_explore_strategy: str = "深入"
+    wild_explore_repeat_delay_seconds: int = 10
+
     # Xinggong sub-features
     enable_message_archive: bool = True
     enable_xinggong_wenan: bool = True
@@ -461,6 +467,15 @@ class Config:
         biguan_mode = str(data.get("biguan_mode", "normal")).strip().lower() or "normal"
         if biguan_mode not in {"normal", "deep"}:
             raise ValueError("biguan_mode 必须是 normal 或 deep")
+        wild_explore_strategy = str(data.get("wild_explore_strategy", "深入")).strip() or "深入"
+        if wild_explore_strategy not in {"谨慎", "均衡", "深入"}:
+            raise ValueError("wild_explore_strategy 必须是 谨慎、均衡 或 深入")
+        wild_explore_interval = data.get("wild_explore_interval_seconds", 7200)
+        if str(wild_explore_interval).strip() == "":
+            wild_explore_interval = 7200
+        wild_explore_repeat_delay = data.get("wild_explore_repeat_delay_seconds", 10)
+        if str(wild_explore_repeat_delay).strip() == "":
+            wild_explore_repeat_delay = 10
         identities_raw = data.get("identity_profiles")
         identity_profiles: tuple[IdentityProfile, ...]
         if isinstance(identities_raw, list):
@@ -558,6 +573,25 @@ class Config:
                 data.get("daily_bushi_exchange_action", ".换取")
             ).strip()
             or ".换取",
+            enable_wild_explore=_parse_bool(
+                data.get("enable_wild_explore", False),
+                "enable_wild_explore",
+            ),
+            wild_explore_interval_seconds=max(
+                60,
+                _parse_int(
+                    wild_explore_interval,
+                    "wild_explore_interval_seconds",
+                ),
+            ),
+            wild_explore_strategy=wild_explore_strategy,
+            wild_explore_repeat_delay_seconds=max(
+                0,
+                _parse_int(
+                    wild_explore_repeat_delay,
+                    "wild_explore_repeat_delay_seconds",
+                ),
+            ),
             garden_seed_name=str(data.get("garden_seed_name", "清灵草种子")).strip() or "清灵草种子",
             garden_poll_interval_seconds=_parse_int(
                 data.get("garden_poll_interval_seconds", 3600),
@@ -814,6 +848,16 @@ class Config:
             "daily_bushi_exchange_action": _get_env_str(
                 "DAILY_BUSHI_EXCHANGE_ACTION",
                 default=".换取",
+            ),
+            "enable_wild_explore": _get_env_bool("ENABLE_WILD_EXPLORE", default=False),
+            "wild_explore_interval_seconds": _get_env_int(
+                "WILD_EXPLORE_INTERVAL_SECONDS",
+                default=7200,
+            ),
+            "wild_explore_strategy": _get_env_str("WILD_EXPLORE_STRATEGY", default="深入"),
+            "wild_explore_repeat_delay_seconds": _get_env_int(
+                "WILD_EXPLORE_REPEAT_DELAY_SECONDS",
+                default=10,
             ),
             "garden_seed_name": _get_env_str("GARDEN_SEED_NAME", default="清灵草种子"),
             "garden_poll_interval_seconds": _get_env_int(
