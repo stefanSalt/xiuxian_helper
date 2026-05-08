@@ -3,6 +3,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from telethon.errors.rpcbaseerrors import BadRequestError
+
 from xiuxian_bot.config import Config, IdentityProfile
 from xiuxian_bot.tg_adapter import TGAdapter
 
@@ -123,6 +125,28 @@ class TestTGAdapter(unittest.IsolatedAsyncioTestCase):
         request = adapter._client.call_args.args[0]
         self.assertEqual(request.reply_to.reply_to_msg_id, 888888)
         self.assertEqual(request.reply_to.top_msg_id, 7310786)
+
+    async def test_send_message_falls_back_to_chat_when_topic_is_closed(self) -> None:
+        adapter = TGAdapter(_dummy_config(), logging.getLogger("test.tg_adapter"))
+        adapter._peer = object()
+        adapter._client = AsyncMock(side_effect=BadRequestError(object(), "TOPIC_CLOSED"))
+        adapter._client.send_message = AsyncMock(return_value=SimpleNamespace(id=987))
+
+        mid = await adapter.send_message(".闭关修炼", reply_to_topic=True)
+
+        self.assertEqual(mid, 987)
+        adapter._client.send_message.assert_awaited_once_with(-100, ".闭关修炼")
+
+    async def test_send_message_keeps_topic_closed_error_for_explicit_reply(self) -> None:
+        adapter = TGAdapter(_dummy_config(), logging.getLogger("test.tg_adapter"))
+        adapter._peer = object()
+        adapter._client = AsyncMock(side_effect=BadRequestError(object(), "TOPIC_CLOSED"))
+        adapter._client.send_message = AsyncMock(return_value=SimpleNamespace(id=987))
+
+        with self.assertRaises(BadRequestError):
+            await adapter.send_message(".宗门传功", reply_to_topic=True, reply_to_msg_id=888888)
+
+        adapter._client.send_message.assert_not_awaited()
 
     async def test_build_context_marks_system_identity_sender(self) -> None:
         adapter = TGAdapter(_dummy_config(), logging.getLogger("test.tg_adapter"))

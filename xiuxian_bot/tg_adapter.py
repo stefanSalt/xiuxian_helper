@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from telethon import TelegramClient, events
+from telethon.errors.rpcbaseerrors import BadRequestError
 from telethon.tl import functions, types
 
 from .config import Config
@@ -110,6 +111,10 @@ class TGAdapter:
                 return mid
         return None
 
+    def _is_topic_closed_error(self, exc: BadRequestError) -> bool:
+        message = str(getattr(exc, "message", "") or exc).upper()
+        return "TOPIC_CLOSED" in message
+
     async def send_message(
         self,
         text: str,
@@ -128,8 +133,18 @@ class TGAdapter:
                     top_msg_id=self._config.topic_id,
                 ),
             )
-            result = await self._client(request)
-            return self._extract_sent_message_id(result)
+            try:
+                result = await self._client(request)
+                return self._extract_sent_message_id(result)
+            except BadRequestError as exc:
+                if reply_to_msg_id is not None or not self._is_topic_closed_error(exc):
+                    raise
+                self._logger.warning(
+                    "topic_closed_fallback chat_id=%s topic_id=%s text=%s",
+                    self._config.game_chat_id,
+                    self._config.topic_id,
+                    text,
+                )
 
         kwargs = {}
         if reply_to_msg_id is not None:

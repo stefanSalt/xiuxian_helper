@@ -700,6 +700,9 @@ class RunnerManager:
         self._runners: dict[int, AccountRunner] = {}
         self._lock = asyncio.Lock()
 
+    def update_system_config(self, system_config: SystemConfig) -> None:
+        self._system_config = system_config
+
     async def start_enabled_accounts(self) -> None:
         for record in self._repository.list_accounts():
             if record.enabled:

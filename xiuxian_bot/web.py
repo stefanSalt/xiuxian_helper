@@ -6,7 +6,7 @@ import json
 import logging
 import secrets
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
@@ -23,6 +23,10 @@ from .config import Config, SystemConfig
 from .core.account_repository import AccountRepository
 from .core.message_archive_repository import MessageArchiveRepository
 from .core.state_store import SQLiteStateStore
+from .core.system_settings_repository import (
+    SHARED_SYSTEM_SETTING_KEYS,
+    SystemSettingsRepository,
+)
 from .runtime import RunnerManager, _resolve_session_name, setup_root_logger
 from .tg_login import TGLoginService
 
@@ -462,6 +466,71 @@ def _inject_shared_config(raw: dict[str, Any], system_config: SystemConfig) -> N
     raw["system_reply_source_usernames"] = system_config.system_reply_source_usernames
 
 
+def _shared_system_settings_values(system_config: SystemConfig) -> dict[str, Any]:
+    return {key: getattr(system_config, key) for key in SHARED_SYSTEM_SETTING_KEYS}
+
+
+def _parse_settings_int(
+    value: Any,
+    label: str,
+    *,
+    allow_zero: bool = False,
+    positive: bool = False,
+) -> int:
+    raw = str(value or "").strip()
+    if not raw and allow_zero:
+        return 0
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} 必须是整数") from exc
+    if parsed == 0 and allow_zero:
+        return parsed
+    if parsed == 0:
+        raise ValueError(f"{label} 不能为 0")
+    if positive and parsed < 0:
+        raise ValueError(f"{label} 必须大于 0")
+    return parsed
+
+
+def _system_settings_values_from_form(form) -> dict[str, Any]:
+    send_to_topic = "send_to_topic" in form
+    values = {
+        "tg_api_id": _parse_settings_int(form.get("tg_api_id"), "TG API ID", positive=True),
+        "tg_api_hash": str(form.get("tg_api_hash") or "").strip(),
+        "game_chat_id": _parse_settings_int(form.get("game_chat_id"), "游戏群 Chat ID"),
+        "topic_id": _parse_settings_int(
+            form.get("topic_id"),
+            "话题 TOPIC_ID",
+            allow_zero=not send_to_topic,
+            positive=True,
+        ),
+        "send_to_topic": send_to_topic,
+        "system_reply_source_usernames": str(
+            form.get("system_reply_source_usernames") or ""
+        ).strip(),
+    }
+    if not values["tg_api_hash"]:
+        raise ValueError("TG API HASH 不能为空")
+    return values
+
+
+def _sync_shared_system_settings_to_accounts(
+    repository: AccountRepository,
+    system_config: SystemConfig,
+) -> list[int]:
+    shared = _shared_system_settings_values(system_config)
+    updated_ids: list[int] = []
+    for record in repository.list_accounts():
+        changed = any(getattr(record.config, key) != value for key, value in shared.items())
+        if not changed:
+            continue
+        updated_config = replace(record.config, **shared)
+        repository.update_account(record.id, record.name, updated_config, enabled=record.enabled)
+        updated_ids.append(record.id)
+    return updated_ids
+
+
 def _build_config_from_form(form, system_config: SystemConfig) -> tuple[str, bool, Config]:
     raw: dict[str, Any] = {}
     for section in FORM_SECTIONS:
@@ -724,7 +793,9 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        system_config = SystemConfig.load()
+        base_system_config = SystemConfig.load()
+        system_settings_repository = SystemSettingsRepository(base_system_config.app_db_path)
+        system_config = system_settings_repository.apply_to_config(base_system_config)
         logger = setup_root_logger(system_config)
         repository = AccountRepository(system_config.app_db_path, logger)
         message_archive_repository = MessageArchiveRepository(system_config.app_db_path, logger)
@@ -743,6 +814,7 @@ def create_app() -> FastAPI:
         app.state.system_config = system_config
         app.state.logger = logger
         app.state.repository = repository
+        app.state.system_settings_repository = system_settings_repository
         app.state.message_archive_repository = message_archive_repository
         app.state.runner_manager = manager
         app.state.tg_login_service = TGLoginService()
@@ -766,6 +838,7 @@ def create_app() -> FastAPI:
                 await asyncio.gather(cleanup_task, return_exceptions=True)
             await manager.shutdown()
             message_archive_repository.close()
+            system_settings_repository.close()
             repository.close()
 
     app = FastAPI(lifespan=lifespan)
@@ -827,6 +900,70 @@ def create_app() -> FastAPI:
             "accounts": repository.count_accounts(),
             "running_accounts": len(manager.snapshots()),
         }
+
+    @app.get("/settings", response_class=HTMLResponse)
+    async def settings_page(request: Request):
+        system_config: SystemConfig = request.app.state.system_config
+        if not _is_authenticated(request, system_config):
+            return _redirect_login()
+        return templates.TemplateResponse(
+            request,
+            "settings.html",
+            _ctx(
+                request,
+                values=_shared_system_settings_values(system_config),
+                error="",
+                message="",
+            ),
+        )
+
+    @app.post("/settings", response_class=HTMLResponse)
+    async def settings_update(request: Request):
+        system_config: SystemConfig = request.app.state.system_config
+        if not _is_authenticated(request, system_config):
+            return _redirect_login()
+        repository: AccountRepository = request.app.state.repository
+        manager: RunnerManager = request.app.state.runner_manager
+        settings_repository: SystemSettingsRepository = request.app.state.system_settings_repository
+        form = await request.form()
+        values = dict(form)
+        values["send_to_topic"] = "send_to_topic" in form
+        try:
+            parsed_values = _system_settings_values_from_form(form)
+            updated_config = replace(system_config, **parsed_values)
+            settings_repository.save_shared_settings(parsed_values)
+            request.app.state.system_config = updated_config
+            update_manager_config = getattr(manager, "update_system_config", None)
+            if callable(update_manager_config):
+                update_manager_config(updated_config)
+            updated_account_ids = _sync_shared_system_settings_to_accounts(
+                repository,
+                updated_config,
+            )
+            for account_id in updated_account_ids:
+                await manager.sync_account(account_id)
+            return templates.TemplateResponse(
+                request,
+                "settings.html",
+                _ctx(
+                    request,
+                    values=_shared_system_settings_values(updated_config),
+                    error="",
+                    message=f"已保存应用设置，已同步 {len(updated_account_ids)} 个账号。",
+                ),
+            )
+        except Exception as exc:
+            return templates.TemplateResponse(
+                request,
+                "settings.html",
+                _ctx(
+                    request,
+                    values=values,
+                    error=str(exc),
+                    message="",
+                ),
+                status_code=400,
+            )
 
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request):
@@ -979,7 +1116,7 @@ def create_app() -> FastAPI:
             missing.append("TG_API_HASH")
         if system_config.game_chat_id == 0:
             missing.append("GAME_CHAT_ID")
-        if system_config.topic_id == 0:
+        if system_config.send_to_topic and system_config.topic_id == 0:
             missing.append("TOPIC_ID")
         if missing:
             raise ValueError("请先配置应用级共享参数: " + ", ".join(missing))

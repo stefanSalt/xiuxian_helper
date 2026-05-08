@@ -12,6 +12,7 @@
 - 新账号默认不自动启动，用户可在账号列表继续编辑游戏配置、启用、启动。
 - `TG API ID`、`TG API HASH` 属于同一个 Telegram 应用，只在应用级配置一次，不在每个 TG 账号里重复填写。
 - `game_chat_id`、`topic_id` 属于同一个游戏群/话题范围，也只在应用级配置一次，不在每个账号里重复填写。
+- 应用级共享设置需要能在 Web 页中修改并持久保存。
 
 ## 默认流程
 - 账号列表保留“新增账号”。
@@ -43,6 +44,9 @@
   - `my_name=""`
   - 其他插件默认关闭或沿用现有默认值。
 - 登录成功后跳转到新账号编辑页，让用户补齐游戏名、身份、插件等账号自身配置。
+- 账号列表提供“应用设置”入口，用于修改 TG API、游戏群、话题、是否发送到话题和系统来源。
+- 保存应用设置后同步更新现有账号的共享字段，并触发已启用账号重新同步。
+- 如果配置的话题已关闭，普通指令会回退到群组根聊天发送，避免 `TOPIC_CLOSED` 无限重试；显式回复某条消息的动作不回退。
 
 ## 需要改动
 - [x] 在 `SystemConfig` 增加应用级共享配置来源：
@@ -52,7 +56,13 @@
   - `TOPIC_ID`
   - `SEND_TO_TOPIC`
   - `SYSTEM_REPLY_SOURCE_USERNAMES`
+- [x] 新增 `app_settings` 持久化表，Web 保存的应用设置优先于 `.env` 默认值。
+- [x] 新增 Web 应用设置页：
+  - `GET /settings`
+  - `POST /settings`
 - [x] 账号表单不再展示/要求重复填写 `tg_api_id`、`tg_api_hash`、`game_chat_id`、`topic_id`、`send_to_topic`、`system_reply_source_usernames`，创建/编辑账号时统一从 `SystemConfig` 注入。
+- [x] 保存应用设置后同步现有账号配置，并触发账号运行状态重新同步。
+- [x] 对普通话题发送增加 `TOPIC_CLOSED` 兜底，回退到群组根聊天发送。
 - [x] 调整 TG 登录路由，从 `/accounts/{id}/tg-login` 改为新增账号级流程：
   - `GET /accounts/new/tg-login`
   - `POST /accounts/new/tg-login/send-code`

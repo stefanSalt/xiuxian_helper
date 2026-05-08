@@ -1821,8 +1821,12 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
         class FakeManager:
             def __init__(self, repository, system_config) -> None:  # type: ignore[no-untyped-def]
                 _ = repository
-                _ = system_config
+                self.system_config = system_config
                 self._snapshots: dict[int, RunnerSnapshot] = {}
+                self.synced_accounts: list[int] = []
+
+            def update_system_config(self, system_config) -> None:  # type: ignore[no-untyped-def]
+                self.system_config = system_config
 
             async def start_enabled_accounts(self) -> None:
                 return None
@@ -1849,7 +1853,7 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                 self._snapshots.pop(account_id, None)
 
             async def sync_account(self, account_id: int) -> None:
-                _ = account_id
+                self.synced_accounts.append(account_id)
                 return None
 
             def snapshots(self) -> dict[int, RunnerSnapshot]:
@@ -1997,6 +2001,7 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(dashboard.status_code, 200)
                         self.assertIn("bot-1", dashboard.text)
                         self.assertIn("锐锋子", dashboard.text)
+                        self.assertIn("应用设置", dashboard.text)
                         self.assertNotIn("/accounts/1/tg-login", dashboard.text)
 
                         new_page = await client.get("/accounts/new")
@@ -2048,6 +2053,104 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         logs_page = await client.get("/accounts/1/logs")
                         self.assertEqual(logs_page.status_code, 200)
                         self.assertIn("账号日志 #1 - bot-1", logs_page.text)
+
+    async def test_shared_settings_page_updates_system_config_and_accounts(self) -> None:
+        import httpx
+
+        from xiuxian_bot.web import create_app
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            system_config = SystemConfig(
+                app_db_path=str(tmp_path / "app.sqlite3"),
+                log_dir=str(tmp_path / "logs"),
+                web_admin_username="admin",
+                web_admin_password="secret",
+                web_secret_key="secret-key",
+                tg_api_id=10001,
+                tg_api_hash="old-hash",
+                game_chat_id=-100111,
+                topic_id=11111,
+                send_to_topic=True,
+                system_reply_source_usernames="hantianzunhl",
+            )
+            fake_manager = self._fake_manager_cls(Path(system_config.log_dir))
+
+            with patch("xiuxian_bot.web.SystemConfig.load", return_value=system_config), patch(
+                "xiuxian_bot.web.AccountRepository.ensure_legacy_account",
+                return_value=None,
+            ), patch("xiuxian_bot.web.RunnerManager", fake_manager):
+                app = create_app()
+                async with app.router.lifespan_context(app):
+                    record = app.state.repository.create_account(
+                        "alpha",
+                        _dummy_config(
+                            account_name="alpha",
+                            tg_api_id=10001,
+                            tg_api_hash="old-hash",
+                            game_chat_id=-100111,
+                            topic_id=11111,
+                            send_to_topic=True,
+                            system_reply_source_usernames="hantianzunhl",
+                        ),
+                        enabled=True,
+                    )
+                    transport = httpx.ASGITransport(app=app)
+                    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                        response = await client.get("/settings", follow_redirects=False)
+                        self.assertEqual(response.status_code, 303)
+                        self.assertEqual(response.headers["location"], "/login")
+
+                        await client.post(
+                            "/login",
+                            data={"username": "admin", "password": "secret"},
+                            follow_redirects=False,
+                        )
+                        page = await client.get("/settings")
+                        self.assertEqual(page.status_code, 200)
+                        self.assertIn("应用设置", page.text)
+                        self.assertIn("old-hash", page.text)
+
+                        update_response = await client.post(
+                            "/settings",
+                            data={
+                                "tg_api_id": "20002",
+                                "tg_api_hash": "new-hash",
+                                "game_chat_id": "-100222",
+                                "topic_id": "22222",
+                                "send_to_topic": "on",
+                                "system_reply_source_usernames": "hantianzunhl,other_source",
+                            },
+                        )
+
+                        self.assertEqual(update_response.status_code, 200)
+                        self.assertIn("已保存应用设置", update_response.text)
+                        self.assertEqual(app.state.system_config.tg_api_id, 20002)
+                        self.assertEqual(app.state.system_config.tg_api_hash, "new-hash")
+                        self.assertEqual(app.state.system_config.game_chat_id, -100222)
+                        self.assertEqual(app.state.system_config.topic_id, 22222)
+                        self.assertEqual(
+                            app.state.system_config.system_reply_source_usernames,
+                            "hantianzunhl,other_source",
+                        )
+                        self.assertEqual(app.state.runner_manager.system_config.tg_api_id, 20002)
+                        self.assertEqual(app.state.runner_manager.synced_accounts, [record.id])
+
+                        stored = app.state.repository.get_account(record.id)
+                        self.assertIsNotNone(stored)
+                        assert stored is not None
+                        self.assertEqual(stored.config.tg_api_id, 20002)
+                        self.assertEqual(stored.config.tg_api_hash, "new-hash")
+                        self.assertEqual(stored.config.game_chat_id, -100222)
+                        self.assertEqual(stored.config.topic_id, 22222)
+                        self.assertEqual(
+                            stored.config.system_reply_source_usernames,
+                            "hantianzunhl,other_source",
+                        )
+                        self.assertEqual(
+                            app.state.system_settings_repository.load_shared_settings()["tg_api_id"],
+                            20002,
+                        )
 
     async def test_account_tg_login_flow(self) -> None:
         import httpx

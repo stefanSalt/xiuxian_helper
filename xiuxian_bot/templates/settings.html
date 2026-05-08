@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+{% block title %}应用设置{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>应用设置</h1>
+    <a href="/" class="btn btn-light">返回</a>
+  </div>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  {% if message %}<p class="success">{{ message }}</p>{% endif %}
+  <form method="post" action="/settings" class="stack-form">
+    <fieldset class="form-section">
+      <legend>Telegram 应用</legend>
+      <div class="grid grid-2">
+        <label class="field">
+          <span>TG API ID</span>
+          <input type="number" name="tg_api_id" value="{{ values.get('tg_api_id', '') }}">
+        </label>
+        <label class="field">
+          <span>TG API HASH</span>
+          <input type="text" name="tg_api_hash" value="{{ values.get('tg_api_hash', '') }}">
+        </label>
+      </div>
+    </fieldset>
+    <fieldset class="form-section">
+      <legend>游戏群范围</legend>
+      <div class="grid grid-2">
+        <label class="field">
+          <span>游戏群 Chat ID</span>
+          <input type="number" name="game_chat_id" value="{{ values.get('game_chat_id', '') }}">
+        </label>
+        <label class="field">
+          <span>话题 TOPIC_ID</span>
+          <input type="number" name="topic_id" value="{{ values.get('topic_id', '') }}">
+        </label>
+        <label class="field checkbox-field">
+          <input type="checkbox" name="send_to_topic" {% if values.get('send_to_topic') %}checked{% endif %}>
+          <span>发送到指定话题</span>
+        </label>
+        <label class="field">
+          <span>额外系统来源(username逗号分隔)</span>
+          <input type="text" name="system_reply_source_usernames" value="{{ values.get('system_reply_source_usernames', '') }}">
+        </label>
+      </div>
+    </fieldset>
+    <div class="actions">
+      <button type="submit" class="btn">保存设置</button>
+      <a href="/" class="btn btn-light">取消</a>
+    </div>
+  </form>
+</section>
+{% endblock %}
