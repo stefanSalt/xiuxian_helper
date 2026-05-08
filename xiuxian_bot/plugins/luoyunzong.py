@@ -310,7 +310,6 @@ class LuoyunzongPlugin:
         return (
             ("警报" in text and "古剑门入侵中" in text)
             or "请速用 .协同守山" in text
-            or ("古剑门" in text and "攻山" in text)
         )
 
     def _looks_like_action_feedback(self, text: str) -> bool:

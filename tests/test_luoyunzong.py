@@ -58,6 +58,17 @@ ATTACK_STATUS = """【落云宗 · 灵眼之树】
 """
 
 
+ATTACK_FORECAST_STATUS = """【落云宗 · 灵眼之树】
+🌿 环境: 生机萎靡 (需 木/森/草)
+🌲 进度:
+🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩⬜ 95.79%
+🔄 阶段: 4 / 4
+🏛️ 三派异动: 【古剑门·攻山夺枝】
+   古剑门趁灵树将熟，突袭山门，试图强夺本轮枝果。
+👤 你的当前状态: 232 点
+"""
+
+
 MATURE_STATUS = """【落云宗 · 灵眼之树】
 ✨ 状态: 成熟采摘期
 ⏳ 剩余: 0秒
@@ -123,6 +134,17 @@ class TestLuoyunzongPlugin(unittest.IsolatedAsyncioTestCase):
 
         assert actions is not None
         self.assertEqual([action.text for action in actions], [".协同守山"])
+
+    async def test_attack_forecast_does_not_send_guard(self) -> None:
+        plugin = LuoyunzongPlugin(
+            _dummy_config(luoyunzong_watering_strategy="always"),
+            logging.getLogger("test"),
+        )
+
+        actions = await plugin.on_message(_ctx(ATTACK_FORECAST_STATUS))
+
+        assert actions is not None
+        self.assertEqual([action.text for action in actions], [".灵树灌溉"])
 
     async def test_mature_status_sends_harvest_once(self) -> None:
         base_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
