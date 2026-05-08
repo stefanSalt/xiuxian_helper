@@ -342,6 +342,15 @@ class Config:
     shiqie_tianji_interval_seconds: int = 12 * 3600
     shiqie_rumeng_interval_seconds: int = 8 * 3600
 
+    # Luoyunzong
+    enable_luoyunzong: bool = False
+    luoyunzong_status_interval_seconds: int = 1800
+    luoyunzong_watering_cooldown_seconds: int = 7200
+    luoyunzong_watering_strategy: str = "match_linggen"
+    luoyunzong_watering_required_needs: str = ""
+    luoyunzong_linggen_refresh_seconds: int = 86400
+    luoyunzong_harvest_suppress_seconds: int = 86400
+
     # Xinggong sub-features
     enable_message_archive: bool = True
     enable_xinggong_wenan: bool = True
@@ -502,6 +511,26 @@ class Config:
         shiqie_rumeng_interval = data.get("shiqie_rumeng_interval_seconds", 8 * 3600)
         if str(shiqie_rumeng_interval).strip() == "":
             shiqie_rumeng_interval = 8 * 3600
+        luoyunzong_status_interval = data.get("luoyunzong_status_interval_seconds", 1800)
+        if str(luoyunzong_status_interval).strip() == "":
+            luoyunzong_status_interval = 1800
+        luoyunzong_watering_cooldown = data.get("luoyunzong_watering_cooldown_seconds", 7200)
+        if str(luoyunzong_watering_cooldown).strip() == "":
+            luoyunzong_watering_cooldown = 7200
+        luoyunzong_linggen_refresh = data.get("luoyunzong_linggen_refresh_seconds", 86400)
+        if str(luoyunzong_linggen_refresh).strip() == "":
+            luoyunzong_linggen_refresh = 86400
+        luoyunzong_harvest_suppress = data.get("luoyunzong_harvest_suppress_seconds", 86400)
+        if str(luoyunzong_harvest_suppress).strip() == "":
+            luoyunzong_harvest_suppress = 86400
+        luoyunzong_watering_strategy = (
+            str(data.get("luoyunzong_watering_strategy", "match_linggen")).strip()
+            or "match_linggen"
+        )
+        if luoyunzong_watering_strategy not in {"match_linggen", "always", "match_need"}:
+            raise ValueError(
+                "luoyunzong_watering_strategy 必须是 match_linggen、always 或 match_need"
+            )
         identities_raw = data.get("identity_profiles")
         identity_profiles: tuple[IdentityProfile, ...]
         if isinstance(identities_raw, list):
@@ -631,6 +660,42 @@ class Config:
                 _parse_int(
                     shiqie_rumeng_interval,
                     "shiqie_rumeng_interval_seconds",
+                ),
+            ),
+            enable_luoyunzong=_parse_bool(
+                data.get("enable_luoyunzong", False),
+                "enable_luoyunzong",
+            ),
+            luoyunzong_status_interval_seconds=max(
+                60,
+                _parse_int(
+                    luoyunzong_status_interval,
+                    "luoyunzong_status_interval_seconds",
+                ),
+            ),
+            luoyunzong_watering_cooldown_seconds=max(
+                60,
+                _parse_int(
+                    luoyunzong_watering_cooldown,
+                    "luoyunzong_watering_cooldown_seconds",
+                ),
+            ),
+            luoyunzong_watering_strategy=luoyunzong_watering_strategy,
+            luoyunzong_watering_required_needs=str(
+                data.get("luoyunzong_watering_required_needs", "")
+            ).strip(),
+            luoyunzong_linggen_refresh_seconds=max(
+                60,
+                _parse_int(
+                    luoyunzong_linggen_refresh,
+                    "luoyunzong_linggen_refresh_seconds",
+                ),
+            ),
+            luoyunzong_harvest_suppress_seconds=max(
+                60,
+                _parse_int(
+                    luoyunzong_harvest_suppress,
+                    "luoyunzong_harvest_suppress_seconds",
                 ),
             ),
             garden_seed_name=str(data.get("garden_seed_name", "清灵草种子")).strip() or "清灵草种子",
@@ -908,6 +973,31 @@ class Config:
             "shiqie_rumeng_interval_seconds": _get_env_int(
                 "SHIQIE_RUMENG_INTERVAL_SECONDS",
                 default=8 * 3600,
+            ),
+            "enable_luoyunzong": _get_env_bool("ENABLE_LUOYUNZONG", default=False),
+            "luoyunzong_status_interval_seconds": _get_env_int(
+                "LUOYUNZONG_STATUS_INTERVAL_SECONDS",
+                default=1800,
+            ),
+            "luoyunzong_watering_cooldown_seconds": _get_env_int(
+                "LUOYUNZONG_WATERING_COOLDOWN_SECONDS",
+                default=7200,
+            ),
+            "luoyunzong_watering_strategy": _get_env_str(
+                "LUOYUNZONG_WATERING_STRATEGY",
+                default="match_linggen",
+            ),
+            "luoyunzong_watering_required_needs": _get_env_str(
+                "LUOYUNZONG_WATERING_REQUIRED_NEEDS",
+                default="",
+            ),
+            "luoyunzong_linggen_refresh_seconds": _get_env_int(
+                "LUOYUNZONG_LINGGEN_REFRESH_SECONDS",
+                default=86400,
+            ),
+            "luoyunzong_harvest_suppress_seconds": _get_env_int(
+                "LUOYUNZONG_HARVEST_SUPPRESS_SECONDS",
+                default=86400,
             ),
             "garden_seed_name": _get_env_str("GARDEN_SEED_NAME", default="清灵草种子"),
             "garden_poll_interval_seconds": _get_env_int(

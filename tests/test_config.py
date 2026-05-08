@@ -191,6 +191,47 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config.shiqie_tianji_interval_seconds, 43200)
         self.assertEqual(config.shiqie_rumeng_interval_seconds, 28800)
 
+    def test_from_mapping_accepts_luoyunzong_fields(self) -> None:
+        config = Config.from_mapping(
+            {
+                "tg_api_id": "1",
+                "tg_api_hash": "hash",
+                "tg_session_name": "session",
+                "game_chat_id": "-100",
+                "topic_id": "123",
+                "my_name": "Me",
+                "enable_luoyunzong": "true",
+                "luoyunzong_status_interval_seconds": "900",
+                "luoyunzong_watering_cooldown_seconds": "7200",
+                "luoyunzong_watering_strategy": "match_need",
+                "luoyunzong_watering_required_needs": "木,森,草",
+                "luoyunzong_linggen_refresh_seconds": "86400",
+                "luoyunzong_harvest_suppress_seconds": "86400",
+            }
+        )
+
+        self.assertTrue(config.enable_luoyunzong)
+        self.assertEqual(config.luoyunzong_status_interval_seconds, 900)
+        self.assertEqual(config.luoyunzong_watering_cooldown_seconds, 7200)
+        self.assertEqual(config.luoyunzong_watering_strategy, "match_need")
+        self.assertEqual(config.luoyunzong_watering_required_needs, "木,森,草")
+        self.assertEqual(config.luoyunzong_linggen_refresh_seconds, 86400)
+        self.assertEqual(config.luoyunzong_harvest_suppress_seconds, 86400)
+
+    def test_from_mapping_rejects_unknown_luoyunzong_strategy(self) -> None:
+        with self.assertRaisesRegex(ValueError, "luoyunzong_watering_strategy"):
+            Config.from_mapping(
+                {
+                    "tg_api_id": "1",
+                    "tg_api_hash": "hash",
+                    "tg_session_name": "session",
+                    "game_chat_id": "-100",
+                    "topic_id": "123",
+                    "my_name": "Me",
+                    "luoyunzong_watering_strategy": "only_wood",
+                }
+            )
+
     def test_from_mapping_accepts_fractional_xinggong_shift_advance_seconds(self) -> None:
         config = Config.from_mapping(
             {

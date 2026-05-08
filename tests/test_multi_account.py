@@ -1916,6 +1916,7 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                                 "active_identity_key": "ruifengzi",
                                 "enable_message_archive": "on",
                                 "enable_biguan": "on",
+                                "enable_luoyunzong": "on",
                                 "switch_command_template": ".切换 {target}",
                                 "switch_back_target": "主魂",
                                 "switch_success_keywords": "切换成功,神念已附着",
@@ -1937,6 +1938,7 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                                 "identity_override_enable_xinggong": ["inherit", "inherit"],
                                 "identity_override_enable_xinggong_guanxing": ["off", "on"],
                                 "identity_override_enable_yuanying": ["inherit", "inherit"],
+                                "identity_override_enable_luoyunzong": ["inherit", "off"],
                                 "identity_override_enable_chuangta": ["inherit", "on"],
                                 "identity_override_enable_lingxiaogong": ["inherit", "inherit"],
                                 "identity_override_enable_zongmen": ["inherit", "inherit"],
@@ -1952,6 +1954,12 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                                 "daily_bushi_times_per_day": "5",
                                 "daily_bushi_interval_seconds": "120",
                                 "daily_bushi_exchange_action": ".换取",
+                                "luoyunzong_status_interval_seconds": "900",
+                                "luoyunzong_watering_cooldown_seconds": "7200",
+                                "luoyunzong_watering_strategy": "match_need",
+                                "luoyunzong_watering_required_needs": "木,森,草",
+                                "luoyunzong_linggen_refresh_seconds": "86400",
+                                "luoyunzong_harvest_suppress_seconds": "86400",
                                 "biguan_cooldown_jitter_min_seconds": "5",
                                 "biguan_cooldown_jitter_max_seconds": "15",
                                 "biguan_retry_jitter_min_seconds": "3",
@@ -2015,6 +2023,8 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(edit_page.status_code, 200)
                         self.assertIn("编辑账号 #1", edit_page.text)
                         self.assertIn("凌霄宫", edit_page.text)
+                        self.assertIn("落云宗", edit_page.text)
+                        self.assertIn("灌溉策略", edit_page.text)
                         self.assertIn("自动引九天罡风", edit_page.text)
                         self.assertNotIn("额外系统来源", edit_page.text)
                         self.assertNotIn("TG API ID", edit_page.text)
@@ -2035,6 +2045,10 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(stored.config.topic_id, 12345)
                         self.assertEqual(stored.config.system_reply_source_usernames, "hantianzunhl,other_source")
                         self.assertTrue(stored.config.enable_message_archive)
+                        self.assertTrue(stored.config.enable_luoyunzong)
+                        self.assertEqual(stored.config.luoyunzong_status_interval_seconds, 900)
+                        self.assertEqual(stored.config.luoyunzong_watering_strategy, "match_need")
+                        self.assertEqual(stored.config.luoyunzong_watering_required_needs, "木,森,草")
                         self.assertEqual(stored.config.active_identity_key, "ruifengzi")
                         avatar = stored.config.identity_by_key("ruifengzi")
                         self.assertIsNotNone(avatar)
@@ -2046,6 +2060,7 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                             {
                                 "enable_biguan": False,
                                 "enable_xinggong_guanxing": True,
+                                "enable_luoyunzong": False,
                                 "enable_chuangta": True,
                             },
                         )
