@@ -82,6 +82,13 @@ HARVESTED_STATUS = """【落云宗 · 灵眼之树】
 """
 
 
+HARVESTED_STATUS_WITH_REMAINING = """【落云宗 · 灵眼之树】
+✨ 状态: 成熟采摘期
+⏳ 剩余: 19小时40分钟10秒
+👤 你的当前状态: 已采摘 (奖励已入袋)
+"""
+
+
 class TestLuoyunzongPlugin(unittest.IsolatedAsyncioTestCase):
     def test_build_plugins_includes_luoyunzong(self) -> None:
         plugins = build_plugins(_dummy_config(), logging.getLogger("test"))
@@ -168,7 +175,7 @@ class TestLuoyunzongPlugin(unittest.IsolatedAsyncioTestCase):
             base_now + timedelta(seconds=86400),
         )
 
-    async def test_harvested_status_suppresses_future_status_checks(self) -> None:
+    async def test_harvested_status_checks_again_after_four_hours(self) -> None:
         base_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
         plugin = LuoyunzongPlugin(
             _dummy_config(),
@@ -176,20 +183,89 @@ class TestLuoyunzongPlugin(unittest.IsolatedAsyncioTestCase):
             now_fn=lambda: base_now,
         )
         calls: list[tuple[str, float, object]] = []
+        sends: list[str] = []
 
         class _FakeScheduler:
             async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
                 calls.append((key, delay_seconds, action))
 
-        async def _send(_plugin: str, _text: str, _reply_to_topic: bool) -> int | None:
-            raise AssertionError("status command should be suppressed")
+        async def _send(_plugin: str, text: str, _reply_to_topic: bool) -> int | None:
+            sends.append(text)
+            return None
 
         await plugin.bootstrap(_FakeScheduler(), _send)
         await plugin.on_message(_ctx(HARVESTED_STATUS))
         await calls[-1][2]()
 
         self.assertEqual(calls[-1][0], "luoyunzong.status.loop")
-        self.assertEqual(calls[-1][1], 86400.0)
+        self.assertEqual(calls[-1][1], 14400.0)
+        self.assertEqual(sends, [".我的灵根", ".灵树状态"])
+
+    async def test_harvested_status_uses_remaining_time(self) -> None:
+        base_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+        plugin = LuoyunzongPlugin(
+            _dummy_config(),
+            logging.getLogger("test"),
+            now_fn=lambda: base_now,
+        )
+
+        await plugin.on_message(_ctx(HARVESTED_STATUS_WITH_REMAINING))
+
+        self.assertEqual(  # type: ignore[attr-defined]
+            plugin._harvest_suppress_until,
+            base_now + timedelta(hours=19, minutes=40, seconds=10),
+        )
+
+    async def test_harvested_status_without_remaining_does_not_extend_suppression(self) -> None:
+        current_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+        plugin = LuoyunzongPlugin(
+            _dummy_config(),
+            logging.getLogger("test"),
+            now_fn=lambda: current_now,
+        )
+        one_hour_status = HARVESTED_STATUS_WITH_REMAINING.replace(
+            "19小时40分钟10秒",
+            "1小时",
+        )
+
+        await plugin.on_message(_ctx(one_hour_status))
+        current_now = current_now + timedelta(minutes=10)
+        await plugin.on_message(_ctx(HARVESTED_STATUS))
+
+        self.assertEqual(  # type: ignore[attr-defined]
+            plugin._harvest_suppress_until,
+            datetime(2026, 5, 8, 13, 0, tzinfo=timezone.utc),
+        )
+
+    async def test_normal_status_clears_harvest_suppression(self) -> None:
+        base_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+        plugin = LuoyunzongPlugin(
+            _dummy_config(luoyunzong_watering_strategy="always"),
+            logging.getLogger("test"),
+            now_fn=lambda: base_now,
+        )
+
+        await plugin.on_message(_ctx(HARVESTED_STATUS_WITH_REMAINING))
+        actions = await plugin.on_message(_ctx(NORMAL_STATUS))
+
+        self.assertIsNone(plugin._harvest_suppress_until)  # type: ignore[attr-defined]
+        assert actions is not None
+        self.assertEqual([action.text for action in actions], [".灵树灌溉"])
+
+    async def test_mature_status_without_harvested_clears_harvest_suppression(self) -> None:
+        base_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+        plugin = LuoyunzongPlugin(
+            _dummy_config(),
+            logging.getLogger("test"),
+            now_fn=lambda: base_now,
+        )
+
+        await plugin.on_message(_ctx(HARVESTED_STATUS_WITH_REMAINING))
+        actions = await plugin.on_message(_ctx(MATURE_STATUS))
+
+        self.assertIsNone(plugin._harvest_suppress_until)  # type: ignore[attr-defined]
+        assert actions is not None
+        self.assertEqual([action.text for action in actions], [".采摘灵果"])
 
     async def test_always_strategy_waters_without_linggen_match(self) -> None:
         plugin = LuoyunzongPlugin(

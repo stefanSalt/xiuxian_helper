@@ -29,6 +29,7 @@ class LuoyunzongPlugin:
     _STATUS_LOOP_KEY = "luoyunzong.status.loop"
     _STATE_KEY = "luoyunzong"
     _GUARD_SUPPRESS_SECONDS = 300
+    _HARVEST_STATUS_CHECK_SECONDS = 4 * 3600
     _VALID_WATERING_STRATEGIES = {"match_linggen", "always", "match_need"}
 
     def __init__(
@@ -126,11 +127,19 @@ class LuoyunzongPlugin:
     async def _handle_status(self, text: str, message_id: int) -> list[SendAction] | None:
         status = self._parse_status(text)
         if status["harvested"]:
-            self._mark_harvest_suppressed()
+            remaining_seconds = status["remaining_seconds"]
+            self._mark_harvest_suppressed(
+                remaining_seconds=remaining_seconds
+                if isinstance(remaining_seconds, int)
+                else None,
+                refresh_default=False,
+            )
             self._pending_action = None
-            await self._schedule_status(self._harvest_remaining_seconds())
+            await self._schedule_status(self._next_status_delay_seconds())
             self._log_status_decision(status, "already_harvested", "suppress")
             return None
+
+        self._clear_harvest_suppression()
 
         if self._pending_action is not None:
             await self._schedule_status(float(self._status_interval_seconds))
@@ -151,7 +160,7 @@ class LuoyunzongPlugin:
 
         if status["mature"]:
             if self._is_harvest_suppressed():
-                await self._schedule_status(self._harvest_remaining_seconds())
+                await self._schedule_status(self._next_status_delay_seconds())
                 self._log_status_decision(status, "harvest_suppressed", "skip")
                 return None
             self._pending_action = "harvest"
@@ -189,7 +198,7 @@ class LuoyunzongPlugin:
             )
         elif kind == "harvest" or "采摘" in text or "奖励已入袋" in text:
             self._mark_harvest_suppressed()
-            await self._schedule_status(self._harvest_remaining_seconds())
+            await self._schedule_status(self._next_status_delay_seconds())
         self._pending_action = None
         self._save_state()
         self._logger.info(
@@ -204,14 +213,10 @@ class LuoyunzongPlugin:
     async def _status_loop(self) -> None:
         if not self.enabled or self._send is None:
             return
-        delay = self._status_delay_seconds()
-        if delay > 0:
-            await self._schedule_status(delay)
-            return
         if self._linggen_needs_refresh():
             await self._send(self.name, self._CMD_LINGGEN, True)
         await self._send(self.name, self._CMD_STATUS, True)
-        await self._schedule_status(float(self._status_interval_seconds))
+        await self._schedule_status(self._next_status_delay_seconds())
 
     async def _schedule_status(self, delay_seconds: float) -> None:
         if self._scheduler is None:
@@ -241,7 +246,16 @@ class LuoyunzongPlugin:
         return now
 
     def _status_delay_seconds(self) -> float:
-        return self._harvest_remaining_seconds()
+        remaining = self._harvest_remaining_seconds()
+        if remaining <= 0:
+            return 0.0
+        return min(remaining, float(self._HARVEST_STATUS_CHECK_SECONDS))
+
+    def _next_status_delay_seconds(self) -> float:
+        delay = self._status_delay_seconds()
+        if delay > 0:
+            return delay
+        return float(self._status_interval_seconds)
 
     def _harvest_remaining_seconds(self) -> float:
         if self._harvest_suppress_until is None:
@@ -262,10 +276,25 @@ class LuoyunzongPlugin:
         age_seconds = (self._now() - self._linggen_refreshed_at).total_seconds()
         return age_seconds >= self._linggen_refresh_seconds
 
-    def _mark_harvest_suppressed(self) -> None:
-        self._harvest_suppress_until = self._now() + timedelta(
-            seconds=self._harvest_suppress_seconds
-        )
+    def _mark_harvest_suppressed(
+        self,
+        remaining_seconds: int | None = None,
+        *,
+        refresh_default: bool = True,
+    ) -> None:
+        now = self._now()
+        if remaining_seconds is not None:
+            self._harvest_suppress_until = now + timedelta(seconds=max(0, remaining_seconds))
+        elif refresh_default or not self._is_harvest_suppressed():
+            self._harvest_suppress_until = now + timedelta(
+                seconds=self._harvest_suppress_seconds
+            )
+        self._save_state()
+
+    def _clear_harvest_suppression(self) -> None:
+        if self._harvest_suppress_until is None:
+            return
+        self._harvest_suppress_until = None
         self._save_state()
 
     def _save_state(self) -> None:
@@ -338,6 +367,7 @@ class LuoyunzongPlugin:
             "mature": self._is_mature_status(text),
             "harvested": self._is_harvested_status(text),
             "under_attack": self._is_attack_status(text),
+            "remaining_seconds": self._parse_remaining_seconds(text),
         }
 
     def _is_tree_status(self, text: str) -> bool:
@@ -368,6 +398,12 @@ class LuoyunzongPlugin:
 
     def _is_harvested_status(self, text: str) -> bool:
         return ("你的当前状态" in text and "已采摘" in text) or "奖励已入袋" in text
+
+    def _parse_remaining_seconds(self, text: str) -> int | None:
+        match = re.search(r"剩余[:：]\s*([0-9 \t天小时分钟分秒]+)", text)
+        if match is None:
+            return None
+        return self._parse_duration_seconds(match.group(1))
 
     def _is_attack_status(self, text: str) -> bool:
         return (
