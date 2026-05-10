@@ -40,6 +40,7 @@ class LuoyunzongPlugin:
     ) -> None:
         self._logger = logger
         self.enabled = bool(getattr(config, "enable_luoyunzong", False))
+        self._identity_key = str(getattr(config, "active_identity_key", "main") or "main")
         self._status_interval_seconds = max(
             60,
             int(getattr(config, "luoyunzong_status_interval_seconds", 1800)),
@@ -106,6 +107,11 @@ class LuoyunzongPlugin:
             self._linggen = linggen
             self._linggen_refreshed_at = self._now()
             self._save_state()
+            self._logger.info(
+                "luoyunzong_linggen_updated identity=%s linggen=%s",
+                self._identity_key,
+                self._linggen,
+            )
             return None
 
         if self._is_tree_status(text):
@@ -121,40 +127,52 @@ class LuoyunzongPlugin:
         status = self._parse_status(text)
         if status["harvested"]:
             self._mark_harvest_suppressed()
+            self._pending_action = None
             await self._schedule_status(self._harvest_remaining_seconds())
+            self._log_status_decision(status, "already_harvested", "suppress")
+            return None
+
+        if self._pending_action is not None:
+            await self._schedule_status(float(self._status_interval_seconds))
+            self._log_status_decision(status, f"pending_{self._pending_action}", "skip")
             return None
 
         if status["under_attack"]:
             if self._is_guard_suppressed():
                 await self._schedule_status(float(self._status_interval_seconds))
+                self._log_status_decision(status, "guard_suppressed", "skip")
                 return None
             self._guard_suppress_until = self._now() + timedelta(seconds=self._GUARD_SUPPRESS_SECONDS)
             self._pending_action = "guard"
             self._save_state()
             await self._schedule_status(float(self._status_interval_seconds))
+            self._log_status_decision(status, "under_attack", self._CMD_GUARD)
             return [self._action(self._CMD_GUARD, message_id)]
 
         if status["mature"]:
             if self._is_harvest_suppressed():
                 await self._schedule_status(self._harvest_remaining_seconds())
+                self._log_status_decision(status, "harvest_suppressed", "skip")
                 return None
             self._pending_action = "harvest"
-            self._mark_harvest_suppressed()
-            await self._schedule_status(self._harvest_remaining_seconds())
+            await self._schedule_status(float(self._status_interval_seconds))
+            self._log_status_decision(status, "mature", self._CMD_HARVEST)
             return [self._action(self._CMD_HARVEST, message_id)]
 
-        if self._should_water(status["needs"]):
+        should_water, water_reason = self._watering_decision(status["needs"])
+        if should_water:
             self._pending_action = "watering"
-            self._watering_next_at = self._now() + timedelta(seconds=self._watering_cooldown_seconds)
-            self._save_state()
             await self._schedule_status(float(self._status_interval_seconds))
+            self._log_status_decision(status, water_reason, self._CMD_WATER)
             return [self._action(self._CMD_WATER, message_id)]
 
         await self._schedule_status(float(self._status_interval_seconds))
+        self._log_status_decision(status, water_reason, "skip")
         return None
 
     async def _handle_action_feedback(self, text: str) -> None:
         kind = self._pending_action
+        remaining: int | None = None
         if kind == "watering" or "灌溉" in text:
             remaining = self._parse_duration_seconds(text)
             if remaining is not None:
@@ -174,6 +192,14 @@ class LuoyunzongPlugin:
             await self._schedule_status(self._harvest_remaining_seconds())
         self._pending_action = None
         self._save_state()
+        self._logger.info(
+            "luoyunzong_feedback identity=%s kind=%s remaining_seconds=%s watering_next_at=%s harvest_suppress_until=%s",
+            self._identity_key,
+            kind or "unknown",
+            remaining if remaining is not None else "-",
+            self._format_datetime(self._watering_next_at),
+            self._format_datetime(self._harvest_suppress_until),
+        )
 
     async def _status_loop(self) -> None:
         if not self.enabled or self._send is None:
@@ -257,15 +283,52 @@ class LuoyunzongPlugin:
         )
 
     def _should_water(self, needs: list[str]) -> bool:
+        return self._watering_decision(needs)[0]
+
+    def _watering_decision(self, needs: list[str]) -> tuple[bool, str]:
         if not needs:
-            return False
+            return False, "no_needs"
         if self._watering_next_at is not None and self._watering_next_at > self._now():
-            return False
+            return False, "watering_cooldown"
         if self._watering_strategy == "always":
-            return True
+            return True, "always"
         if self._watering_strategy == "match_need":
-            return any(need in self._watering_required_needs for need in needs)
-        return bool(self._linggen) and any(need and need in self._linggen for need in needs)
+            matched = any(need in self._watering_required_needs for need in needs)
+            return matched, "match_need" if matched else "need_mismatch"
+        if not self._linggen:
+            return False, "linggen_missing"
+        matched = any(need and need in self._linggen for need in needs)
+        return matched, "linggen_match" if matched else "linggen_mismatch"
+
+    def _log_status_decision(
+        self,
+        status: dict[str, object],
+        reason: str,
+        action: str,
+    ) -> None:
+        needs = ",".join(status["needs"]) if isinstance(status["needs"], list) else "-"
+        self._logger.info(
+            "luoyunzong_decision identity=%s action=%s reason=%s strategy=%s "
+            "needs=%s linggen=%s watering_next_at=%s harvest_suppress_until=%s "
+            "guard_suppress_until=%s mature=%s harvested=%s under_attack=%s progress=%s stage=%s",
+            self._identity_key,
+            action,
+            reason,
+            self._watering_strategy,
+            needs or "-",
+            self._linggen or "-",
+            self._format_datetime(self._watering_next_at),
+            self._format_datetime(self._harvest_suppress_until),
+            self._format_datetime(self._guard_suppress_until),
+            status["mature"],
+            status["harvested"],
+            status["under_attack"],
+            status["progress"],
+            status["stage"],
+        )
+
+    def _format_datetime(self, value: datetime | None) -> str:
+        return serialize_datetime(value) or "-"
 
     def _parse_status(self, text: str) -> dict[str, object]:
         return {

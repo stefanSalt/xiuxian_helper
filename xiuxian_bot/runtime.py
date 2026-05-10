@@ -37,7 +37,7 @@ class _FocusFilter(logging.Filter):
         if record.levelno >= logging.WARNING:
             return True
         msg = record.getMessage()
-        return msg.startswith(">>") or msg.startswith("<<")
+        return msg.startswith(">>") or msg.startswith("<<") or msg.startswith("luoyunzong_")
 
 
 _WS_RE = re.compile(r"\s+")

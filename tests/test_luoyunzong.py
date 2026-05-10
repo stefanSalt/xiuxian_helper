@@ -159,7 +159,14 @@ class TestLuoyunzongPlugin(unittest.IsolatedAsyncioTestCase):
 
         assert actions is not None
         self.assertEqual([action.text for action in actions], [".采摘灵果"])
+        self.assertIsNone(plugin._harvest_suppress_until)  # type: ignore[attr-defined]
         self.assertIsNone(second_actions)
+
+        await plugin.on_message(_ctx("采摘灵果成功，奖励已入袋。"))
+        self.assertEqual(  # type: ignore[attr-defined]
+            plugin._harvest_suppress_until,
+            base_now + timedelta(seconds=86400),
+        )
 
     async def test_harvested_status_suppresses_future_status_checks(self) -> None:
         base_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
@@ -232,6 +239,45 @@ class TestLuoyunzongPlugin(unittest.IsolatedAsyncioTestCase):
         await plugin.on_message(_ctx("灵树灌溉冷却中，请在 1小时59分钟45秒 后再来。"))
 
         self.assertIn((7200.0, 7185.0), [(7200.0, delay) for _, delay, _ in calls])
+
+    async def test_watering_state_waits_for_feedback(self) -> None:
+        base_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+        plugin = LuoyunzongPlugin(
+            _dummy_config(luoyunzong_watering_strategy="always"),
+            logging.getLogger("test"),
+            now_fn=lambda: base_now,
+        )
+
+        actions = await plugin.on_message(_ctx(NORMAL_STATUS))
+        second_actions = await plugin.on_message(_ctx(NORMAL_STATUS))
+
+        assert actions is not None
+        self.assertEqual([action.text for action in actions], [".灵树灌溉"])
+        self.assertIsNone(plugin._watering_next_at)  # type: ignore[attr-defined]
+        self.assertIsNone(second_actions)
+
+        await plugin.on_message(_ctx("【✂️ 灵树灌溉】 成熟度: 0.95% -> 1.05%"))
+        self.assertEqual(  # type: ignore[attr-defined]
+            plugin._watering_next_at,
+            base_now + timedelta(seconds=7200),
+        )
+
+    async def test_status_decision_logs_skip_reason(self) -> None:
+        plugin = LuoyunzongPlugin(
+            _dummy_config(luoyunzong_watering_strategy="match_linggen"),
+            logging.getLogger("test.luoyunzong"),
+        )
+
+        with self.assertLogs("test.luoyunzong", level="INFO") as captured:
+            actions = await plugin.on_message(_ctx(NORMAL_STATUS))
+
+        self.assertIsNone(actions)
+        self.assertTrue(
+            any(
+                "luoyunzong_decision" in line and "reason=linggen_missing" in line
+                for line in captured.output
+            )
+        )
 
 
 if __name__ == "__main__":
