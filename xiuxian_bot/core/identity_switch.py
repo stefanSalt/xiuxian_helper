@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Awaitable, Callable
 
 from ..config import Config, IdentityProfile
@@ -20,6 +21,34 @@ class _PendingSwitch:
     command_msg_id: int | None
     requested_at: datetime
     future: asyncio.Future[bool]
+
+
+def identity_match_score(normalized_text: str, identity: IdentityProfile) -> int:
+    score = 0
+    for token in identity.normalized_tokens():
+        if token and token in normalized_text:
+            score = max(score, len(token))
+    return score
+
+
+def unique_best_identity_match(
+    normalized_text: str,
+    identities: Iterable[IdentityProfile],
+) -> IdentityProfile | None:
+    matched: IdentityProfile | None = None
+    matched_score = 0
+    ambiguous = False
+    for identity in identities:
+        score = identity_match_score(normalized_text, identity)
+        if score <= 0:
+            continue
+        if score > matched_score:
+            matched = identity
+            matched_score = score
+            ambiguous = False
+        elif score == matched_score:
+            ambiguous = True
+    return None if ambiguous else matched
 
 
 class IdentitySwitchCoordinator:
@@ -88,74 +117,55 @@ class IdentitySwitchCoordinator:
         return any(keyword in normalized_text for keyword in self._iter_keywords(raw_keywords))
 
     def _matches_identity(self, normalized_text: str, identity: IdentityProfile) -> bool:
-        return any(token in normalized_text for token in identity.normalized_tokens())
+        return identity_match_score(normalized_text, identity) > 0
 
     def observe(self, ctx: MessageContext) -> None:
         normalized_text = normalize_match_text(ctx.text)
         if not normalized_text:
             return
 
-        if self._matches_keywords(normalized_text, self._config.switch_back_success_keywords):
-            self.mark_active("main")
-            if self._pending_switch is not None and not self._pending_switch.future.done():
-                if self._config.identity_by_key(self._pending_switch.target_key) is not None:
-                    self._pending_switch.future.set_result(self._pending_switch.target_key == "main")
+        pending = self._pending_switch
+        if pending is not None:
+            if self._matches_keywords(normalized_text, self._config.switch_back_success_keywords):
+                self.mark_active("main")
+                if not pending.future.done():
+                    pending.future.set_result(pending.target_key == "main")
+                self._pending_switch = None
+                return
+
+            target = self._config.identity_by_key(pending.target_key)
+            if (
+                target is not None
+                and self._matches_keywords(normalized_text, self._config.switch_success_keywords)
+                and self._matches_identity(normalized_text, target)
+            ):
+                self.mark_active(target.key)
+                if not pending.future.done():
+                    pending.future.set_result(True)
+                self._pending_switch = None
+                return
+
+            related = bool(
+                ctx.is_effective_reply
+                or (pending.command_msg_id is not None and ctx.reply_to_msg_id == pending.command_msg_id)
+            )
+            if related and self._matches_keywords(normalized_text, self._config.switch_failure_keywords):
+                if not pending.future.done():
+                    pending.future.set_result(False)
                 self._pending_switch = None
             return
 
-        for identity in self._config.identities:
-            if identity.is_main:
-                continue
-            if self._matches_keywords(normalized_text, self._config.switch_success_keywords) and self._matches_identity(
-                normalized_text, identity
-            ):
-                self.mark_active(identity.key)
-                if (
-                    self._pending_switch is not None
-                    and self._pending_switch.target_key == identity.key
-                    and not self._pending_switch.future.done()
-                ):
-                    self._pending_switch.future.set_result(True)
-                    self._pending_switch = None
-                return
-
-        pending = self._pending_switch
-        if pending is None:
-            return
-        related = bool(
-            ctx.is_effective_reply
-            or (pending.command_msg_id is not None and ctx.reply_to_msg_id == pending.command_msg_id)
-        )
-        if not related:
-            return
-        if self._matches_keywords(normalized_text, self._config.switch_failure_keywords):
-            if not pending.future.done():
-                pending.future.set_result(False)
-            self._pending_switch = None
-            return
-
-        main_identity = self._config.identity_by_key("main")
-        if (
-            main_identity is not None
-            and pending.target_key == "main"
-            and self._matches_keywords(normalized_text, self._config.switch_back_success_keywords)
-        ):
+        if self._matches_keywords(normalized_text, self._config.switch_back_success_keywords):
             self.mark_active("main")
-            if not pending.future.done():
-                pending.future.set_result(True)
-            self._pending_switch = None
             return
 
-        target = self._config.identity_by_key(pending.target_key)
-        if (
-            target is not None
-            and self._matches_keywords(normalized_text, self._config.switch_success_keywords)
-            and self._matches_identity(normalized_text, target)
-        ):
-            self.mark_active(target.key)
-            if not pending.future.done():
-                pending.future.set_result(True)
-            self._pending_switch = None
+        if self._matches_keywords(normalized_text, self._config.switch_success_keywords):
+            identity = unique_best_identity_match(
+                normalized_text,
+                (identity for identity in self._config.identities if not identity.is_main),
+            )
+            if identity is not None:
+                self.mark_active(identity.key)
 
     def observe_text(self, text: str) -> None:
         ctx = MessageContext(

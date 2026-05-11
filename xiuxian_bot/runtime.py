@@ -10,7 +10,7 @@ from pathlib import Path
 from .config import Config, SystemConfig
 from .core.account_repository import AccountRecord, AccountRepository
 from .core.dispatcher import Dispatcher
-from .core.identity_switch import IdentitySwitchCoordinator
+from .core.identity_switch import IdentitySwitchCoordinator, unique_best_identity_match
 from .core.message_archive_repository import MessageArchiveInput, MessageArchiveRepository
 from .core.rate_limit import RateLimiter
 from .core.reliable_sender import ReliableSender
@@ -573,17 +573,8 @@ class AccountRunner:
             normalized = normalize_match_text(text)
             if not normalized:
                 return None
-            matched: _IdentityRuntime | None = None
-            matched_score = 0
-            for identity in base_config.identities:
-                score = 0
-                for token in identity.normalized_tokens():
-                    if token and token in normalized:
-                        score = max(score, len(token))
-                if score > matched_score:
-                    matched = runtimes.get(identity.key)
-                    matched_score = score
-            return matched
+            matched = unique_best_identity_match(normalized, base_config.identities)
+            return runtimes.get(matched.key) if matched is not None else None
 
         def _runtime_for_context(ctx) -> _IdentityRuntime:
             binding = _binding_for_message_id(ctx.reply_to_msg_id)
