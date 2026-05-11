@@ -385,6 +385,7 @@ class AccountRunner:
         recent_sent_ids: deque[int] = deque(maxlen=50)
         recent_sent_bindings: dict[int, _SentMessageBinding] = {}
         pause_mode_active = False
+        identity_send_lock = asyncio.Lock()
 
         def _active_runtime() -> _IdentityRuntime:
             runtime = runtimes.get(identity_switch.active_identity_key)
@@ -439,15 +440,7 @@ class AccountRunner:
             identity_key: str | None = None,
         ) -> int | None:
             target_key = identity_key or identity_switch.active_identity_key
-            if not await identity_switch.ensure_identity(target_key):
-                self._logger.warning("identity_switch_failed target=%s plugin=%s text=%s", target_key, plugin, text)
-                return None
             runtime = runtimes[target_key]
-            pause_message = _current_pause_message() if target_key == identity_switch.active_identity_key else None
-            if pause_message is not None:
-                await _enter_pause_mode(pause_message)
-                self._logger.warning("send_suppressed_for_pause plugin=%s text=%s", plugin, text)
-                return None
             xinggong = runtime.xinggong
             while xinggong is not None and getattr(xinggong, "enabled", False):
                 wait_seconds = xinggong.send_block_delay_seconds(plugin, text)
@@ -461,37 +454,48 @@ class AccountRunner:
                     text,
                 )
                 await asyncio.sleep(wait_seconds)
-            mid = await sender.send(
-                plugin,
-                text,
-                bool(reply_to_topic and runtime.config.send_to_topic),
-                reply_to_msg_id=reply_to_msg_id,
-                identity_key=target_key,
-            )
-            _remember_sent(mid, identity_key=target_key, plugin=plugin)
-            if (
-                mid is not None
-                and target_key != "main"
-                and base_config.auto_return_main_after_avatar_action
-                and base_config.identity_by_key("main") is not None
-            ):
-                async def _return_main() -> None:
-                    if identity_switch.active_identity_key != target_key:
-                        return
-                    if not await identity_switch.ensure_identity("main"):
-                        self._logger.warning(
-                            "identity_return_main_failed from=%s plugin=%s text=%s",
-                            target_key,
-                            plugin,
-                            text,
-                        )
 
-                await scheduler.schedule(
-                    key="__identity__:return_main",
-                    delay_seconds=float(base_config.auto_return_main_delay_seconds),
-                    action=_return_main,
+            async with identity_send_lock:
+                if not await identity_switch.ensure_identity(target_key):
+                    self._logger.warning("identity_switch_failed target=%s plugin=%s text=%s", target_key, plugin, text)
+                    return None
+                pause_message = _current_pause_message() if target_key == identity_switch.active_identity_key else None
+                if pause_message is not None:
+                    await _enter_pause_mode(pause_message)
+                    self._logger.warning("send_suppressed_for_pause plugin=%s text=%s", plugin, text)
+                    return None
+                mid = await sender.send(
+                    plugin,
+                    text,
+                    bool(reply_to_topic and runtime.config.send_to_topic),
+                    reply_to_msg_id=reply_to_msg_id,
+                    identity_key=target_key,
                 )
-            return mid
+                _remember_sent(mid, identity_key=target_key, plugin=plugin)
+                if (
+                    mid is not None
+                    and target_key != "main"
+                    and base_config.auto_return_main_after_avatar_action
+                    and base_config.identity_by_key("main") is not None
+                ):
+                    async def _return_main() -> None:
+                        async with identity_send_lock:
+                            if identity_switch.active_identity_key != target_key:
+                                return
+                            if not await identity_switch.ensure_identity("main"):
+                                self._logger.warning(
+                                    "identity_return_main_failed from=%s plugin=%s text=%s",
+                                    target_key,
+                                    plugin,
+                                    text,
+                                )
+
+                    await scheduler.schedule(
+                        key="__identity__:return_main",
+                        delay_seconds=float(base_config.auto_return_main_delay_seconds),
+                        action=_return_main,
+                    )
+                return mid
 
         async def _execute_action(action, *, identity_key: str) -> None:
             if identity_key == identity_switch.active_identity_key:
