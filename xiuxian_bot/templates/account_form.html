@@ -12,6 +12,75 @@
     </div>
   </div>
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+  {% macro identity_panel(identity, index, is_template=false) -%}
+  {% set overrides = identity.get('config_overrides', {}) %}
+  <div class="identity-panel{% if index == 0 and not is_template %} active{% endif %}" data-identity-row>
+    <div class="identity-card-head">
+      <strong data-identity-heading>{% if index == 0 and not is_template %}主魂{% else %}化身{% endif %}</strong>
+      <button type="button" class="btn btn-danger" data-remove-identity {% if index == 0 and not is_template %}disabled{% endif %}>删除</button>
+    </div>
+    <div class="grid grid-2">
+      <label class="field">
+        <span>身份 key</span>
+        <input type="text" name="identity_key" value="{{ identity.get('key', 'main' if index == 0 else '') }}" {% if index == 0 and not is_template %}readonly{% endif %}>
+      </label>
+      <label class="field">
+        <span>类型</span>
+        <select name="identity_kind">
+          <option value="main" {% if identity.get('kind') == 'main' %}selected{% endif %}>主魂</option>
+          <option value="avatar" {% if identity.get('kind', 'avatar' if index > 0 else 'main') == 'avatar' %}selected{% endif %}>化身</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>游戏名 / 道号</span>
+        <input type="text" name="identity_my_name" value="{{ identity.get('my_name', '') }}">
+      </label>
+      <label class="field">
+        <span>切换目标</span>
+        <input type="text" name="identity_switch_target" value="{{ identity.get('switch_target', '主魂' if index == 0 else '') }}">
+      </label>
+      <label class="field">
+        <span>显示名</span>
+        <input type="text" name="identity_display_name" value="{{ identity.get('display_name', '') }}">
+      </label>
+      <label class="field">
+        <span>TG username</span>
+        <input type="text" name="identity_tg_username" value="{{ identity.get('tg_username', '') }}">
+      </label>
+      <label class="field">
+        <span>游戏 ID</span>
+        <input type="text" name="identity_game_id" value="{{ identity.get('game_id', '') }}">
+      </label>
+    </div>
+    <div class="identity-overrides">
+      <div class="muted">身份插件配置：留空或选择不覆盖时，继承账号全局配置。</div>
+      {% for section_title, fields in identity_plugin_sections %}
+      <fieldset class="identity-plugin-section">
+        <legend>{{ section_title }}</legend>
+        <div class="grid grid-2">
+          {% for field in fields %}
+          {% set override_value = overrides.get(field.name) %}
+          <label class="field {% if field.type == 'checkbox' %}checkbox-field{% endif %}">
+            <span>{{ field.label }}</span>
+            {% if field.type == 'checkbox' %}
+            <select name="identity_override_{{ field.name }}">
+              <option value="inherit" {% if override_value is none %}selected{% endif %}>不覆盖</option>
+              <option value="on" {% if override_value is sameas true %}selected{% endif %}>开启</option>
+              <option value="off" {% if override_value is sameas false %}selected{% endif %}>关闭</option>
+            </select>
+            {% else %}
+            <input type="{{ field.type }}" name="identity_override_{{ field.name }}" value="{% if override_value is not none %}{{ override_value }}{% endif %}" placeholder="继承账号全局"{% if field.step is defined %} step="{{ field.step }}"{% endif %}>
+            {% endif %}
+          </label>
+          {% endfor %}
+        </div>
+      </fieldset>
+      {% endfor %}
+    </div>
+  </div>
+  {%- endmacro %}
+
   <form method="post" action="{{ action }}" class="stack-form">
     {% for section_title, fields in form_sections %}
     <fieldset class="form-section">
@@ -31,66 +100,18 @@
       </div>
     </fieldset>
     {% endfor %}
+
     <fieldset class="form-section identity-section">
       <legend>身份配置</legend>
       <p class="muted">第一行固定为主魂；化身会在执行各自任务前自动切换。</p>
+      <div class="identity-tabs" id="identity-tabs" role="tablist">
+        {% for identity in values.get('identity_profiles', []) %}
+        <button type="button" class="identity-tab{% if loop.first %} active{% endif %}" data-identity-tab>{{ identity.get('display_name') or identity.get('my_name') or identity.get('key') or ('主魂' if loop.first else '化身') }}</button>
+        {% endfor %}
+      </div>
       <div id="identity-list" class="identity-list">
         {% for identity in values.get('identity_profiles', []) %}
-        <div class="identity-card" data-identity-row>
-          <div class="identity-card-head">
-            <strong>{% if loop.first %}主魂{% else %}化身{% endif %}</strong>
-            <button type="button" class="btn btn-danger" data-remove-identity {% if loop.first %}disabled{% endif %}>删除</button>
-          </div>
-          <div class="grid grid-2">
-            <label class="field">
-              <span>身份 key</span>
-              <input type="text" name="identity_key" value="{{ identity.get('key', 'main' if loop.first else '') }}" {% if loop.first %}readonly{% endif %}>
-            </label>
-            <label class="field">
-              <span>类型</span>
-              <select name="identity_kind">
-                <option value="main" {% if identity.get('kind') == 'main' %}selected{% endif %}>主魂</option>
-                <option value="avatar" {% if identity.get('kind') == 'avatar' %}selected{% endif %}>化身</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>游戏名 / 道号</span>
-              <input type="text" name="identity_my_name" value="{{ identity.get('my_name', '') }}">
-            </label>
-            <label class="field">
-              <span>切换目标</span>
-              <input type="text" name="identity_switch_target" value="{{ identity.get('switch_target', '主魂' if loop.first else '') }}">
-            </label>
-            <label class="field">
-              <span>显示名</span>
-              <input type="text" name="identity_display_name" value="{{ identity.get('display_name', '') }}">
-            </label>
-            <label class="field">
-              <span>TG username</span>
-              <input type="text" name="identity_tg_username" value="{{ identity.get('tg_username', '') }}">
-            </label>
-            <label class="field">
-              <span>游戏 ID</span>
-              <input type="text" name="identity_game_id" value="{{ identity.get('game_id', '') }}">
-            </label>
-          </div>
-          <div class="identity-overrides">
-            <div class="muted">插件覆盖：不覆盖表示跟随账号全局配置。</div>
-            <div class="grid grid-2">
-              {% for override in identity_override_fields %}
-              {% set override_value = identity.get('config_overrides', {}).get(override.name) %}
-              <label class="field">
-                <span>{{ override.label }}</span>
-                <select name="identity_override_{{ override.name }}">
-                  <option value="inherit" {% if override_value is none %}selected{% endif %}>不覆盖</option>
-                  <option value="on" {% if override_value is sameas true %}selected{% endif %}>开启</option>
-                  <option value="off" {% if override_value is sameas false %}selected{% endif %}>关闭</option>
-                </select>
-              </label>
-              {% endfor %}
-            </div>
-          </div>
-        </div>
+        {{ identity_panel(identity, loop.index0) }}
         {% endfor %}
       </div>
       <div class="actions">
@@ -106,55 +127,84 @@
 </section>
 
 <template id="identity-template">
-  <div class="identity-card" data-identity-row>
-    <div class="identity-card-head">
-      <strong>化身</strong>
-      <button type="button" class="btn btn-danger" data-remove-identity>删除</button>
-    </div>
-    <div class="grid grid-2">
-      <label class="field"><span>身份 key</span><input type="text" name="identity_key" value=""></label>
-      <label class="field">
-        <span>类型</span>
-        <select name="identity_kind">
-          <option value="main">主魂</option>
-          <option value="avatar" selected>化身</option>
-        </select>
-      </label>
-      <label class="field"><span>游戏名 / 道号</span><input type="text" name="identity_my_name" value=""></label>
-      <label class="field"><span>切换目标</span><input type="text" name="identity_switch_target" value=""></label>
-      <label class="field"><span>显示名</span><input type="text" name="identity_display_name" value=""></label>
-      <label class="field"><span>TG username</span><input type="text" name="identity_tg_username" value=""></label>
-      <label class="field"><span>游戏 ID</span><input type="text" name="identity_game_id" value=""></label>
-    </div>
-    <div class="identity-overrides">
-      <div class="muted">插件覆盖：不覆盖表示跟随账号全局配置。</div>
-      <div class="grid grid-2">
-        {% for override in identity_override_fields %}
-        <label class="field">
-          <span>{{ override.label }}</span>
-          <select name="identity_override_{{ override.name }}">
-            <option value="inherit" selected>不覆盖</option>
-            <option value="on">开启</option>
-            <option value="off">关闭</option>
-          </select>
-        </label>
-        {% endfor %}
-      </div>
-    </div>
-  </div>
+  {{ identity_panel({"key": "", "kind": "avatar", "my_name": "", "switch_target": "", "display_name": "", "game_id": "", "tg_username": "", "config_overrides": {}}, 1, true) }}
 </template>
 
 <script>
   const identityList = document.getElementById('identity-list');
   const identityTemplate = document.getElementById('identity-template');
+  const identityTabs = document.getElementById('identity-tabs');
+
+  function identityPanels() {
+    return Array.from(identityList?.querySelectorAll('[data-identity-row]') || []);
+  }
+
+  function identityPanelLabel(panel, index) {
+    if (index === 0) return '主魂';
+    const displayName = panel.querySelector('[name="identity_display_name"]')?.value.trim();
+    const myName = panel.querySelector('[name="identity_my_name"]')?.value.trim();
+    const key = panel.querySelector('[name="identity_key"]')?.value.trim();
+    return displayName || myName || key || `化身 ${index}`;
+  }
+
+  function activateIdentity(index) {
+    const panels = identityPanels();
+    panels.forEach((panel, panelIndex) => {
+      panel.classList.toggle('active', panelIndex === index);
+    });
+    identityTabs?.querySelectorAll('[data-identity-tab]').forEach((tab, tabIndex) => {
+      tab.classList.toggle('active', tabIndex === index);
+    });
+  }
+
+  function syncIdentityTabs(activeIndex = null) {
+    if (!identityTabs) return;
+    const panels = identityPanels();
+    const currentIndex = activeIndex ?? Math.max(0, panels.findIndex((panel) => panel.classList.contains('active')));
+    identityTabs.replaceChildren();
+    panels.forEach((panel, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'identity-tab';
+      button.dataset.identityTab = '';
+      button.textContent = identityPanelLabel(panel, index);
+      button.addEventListener('click', () => activateIdentity(index));
+      identityTabs.appendChild(button);
+
+      panel.querySelector('[data-identity-heading]').textContent = index === 0 ? '主魂' : '化身';
+      panel.querySelector('[data-remove-identity]').disabled = index === 0;
+      const keyInput = panel.querySelector('[name="identity_key"]');
+      const kindSelect = panel.querySelector('[name="identity_kind"]');
+      if (index === 0) {
+        keyInput.value = 'main';
+        keyInput.readOnly = true;
+        kindSelect.value = 'main';
+      } else {
+        keyInput.readOnly = false;
+        if (kindSelect.value === 'main') kindSelect.value = 'avatar';
+      }
+    });
+    activateIdentity(Math.min(currentIndex < 0 ? 0 : currentIndex, Math.max(0, panels.length - 1)));
+  }
+
   document.getElementById('add-identity')?.addEventListener('click', () => {
     const node = identityTemplate.content.firstElementChild.cloneNode(true);
     identityList.appendChild(node);
+    syncIdentityTabs(identityPanels().length - 1);
   });
   identityList?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-remove-identity]');
     if (!button || button.disabled) return;
+    const panels = identityPanels();
+    const index = panels.indexOf(button.closest('[data-identity-row]'));
     button.closest('[data-identity-row]')?.remove();
+    syncIdentityTabs(Math.max(0, index - 1));
   });
+  identityList?.addEventListener('input', (event) => {
+    if (event.target.matches('[name="identity_display_name"], [name="identity_my_name"], [name="identity_key"]')) {
+      syncIdentityTabs();
+    }
+  });
+  syncIdentityTabs(0);
 </script>
 {% endblock %}

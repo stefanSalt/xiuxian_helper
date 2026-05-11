@@ -259,6 +259,33 @@ FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
 ]
 
 
+IDENTITY_ACCOUNT_SECTION_TITLES = {"账号基础", "主魂 / 化身", "全局发送"}
+
+
+def _build_identity_plugin_sections() -> list[tuple[str, list[dict[str, str]]]]:
+    sections: list[tuple[str, list[dict[str, str]]]] = []
+    seen_fields: set[str] = set()
+    for section_title, fields in FORM_SECTIONS:
+        if section_title in IDENTITY_ACCOUNT_SECTION_TITLES:
+            continue
+        section_fields: list[dict[str, str]] = []
+        for field in fields:
+            name = field["name"]
+            if name in seen_fields:
+                continue
+            seen_fields.add(name)
+            section_fields.append(field)
+        if section_fields:
+            sections.append((section_title, section_fields))
+    return sections
+
+
+IDENTITY_PLUGIN_SECTIONS = _build_identity_plugin_sections()
+IDENTITY_PLUGIN_FIELDS = tuple(
+    field for _, fields in IDENTITY_PLUGIN_SECTIONS for field in fields
+)
+
+
 def _template_values_for_new(system_config: SystemConfig) -> dict[str, Any]:
     return {
         "name": "",
@@ -399,6 +426,26 @@ def _list_get(values: list[str], index: int, default: str = "") -> str:
     return values[index].strip()
 
 
+def _parse_identity_override_value(field: dict[str, str], raw_value: str) -> Any | None:
+    value = str(raw_value or "").strip()
+    if field["type"] == "checkbox":
+        if value == "on":
+            return True
+        if value == "off":
+            return False
+        return None
+    if not value:
+        return None
+    if field["type"] == "number":
+        try:
+            if field.get("step") == "any":
+                return float(value)
+            return int(value)
+        except ValueError as exc:
+            raise ValueError(f"{field['label']} 必须是数字") from exc
+    return value
+
+
 def _parse_identity_profiles_from_form(form) -> list[dict[str, Any]]:
     keys = _form_list(form, "identity_key")
     if not keys:
@@ -416,7 +463,7 @@ def _parse_identity_profiles_from_form(form) -> list[dict[str, Any]]:
     tg_usernames = _form_list(form, "identity_tg_username")
     override_values = {
         field["name"]: _form_list(form, f"identity_override_{field['name']}")
-        for field in IDENTITY_OVERRIDE_FIELDS
+        for field in IDENTITY_PLUGIN_FIELDS
     }
 
     profiles: list[dict[str, Any]] = []
@@ -439,13 +486,12 @@ def _parse_identity_profiles_from_form(form) -> list[dict[str, Any]]:
             raise ValueError(f"身份 key 重复: {key}")
         seen_keys.add(key)
 
-        config_overrides: dict[str, bool] = {}
-        for field in IDENTITY_OVERRIDE_FIELDS:
-            value = _list_get(override_values[field["name"]], index, "inherit")
-            if value == "on":
-                config_overrides[field["name"]] = True
-            elif value == "off":
-                config_overrides[field["name"]] = False
+        config_overrides: dict[str, Any] = {}
+        for field in IDENTITY_PLUGIN_FIELDS:
+            value = _list_get(override_values[field["name"]], index)
+            parsed_override = _parse_identity_override_value(field, value)
+            if parsed_override is not None:
+                config_overrides[field["name"]] = parsed_override
 
         profiles.append(
             {
@@ -870,6 +916,7 @@ def create_app() -> FastAPI:
         return {
             "system_config": app.state.system_config,
             "identity_override_fields": IDENTITY_OVERRIDE_FIELDS,
+            "identity_plugin_sections": IDENTITY_PLUGIN_SECTIONS,
             **extra,
         }
 

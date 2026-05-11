@@ -2121,6 +2121,11 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                                 "identity_override_enable_chuangta": ["inherit", "on"],
                                 "identity_override_enable_lingxiaogong": ["inherit", "inherit"],
                                 "identity_override_enable_zongmen": ["inherit", "inherit"],
+                                "identity_override_biguan_mode": ["", "deep"],
+                                "identity_override_luoyunzong_status_interval_seconds": ["", "600"],
+                                "identity_override_luoyunzong_watering_strategy": ["", "always"],
+                                "identity_override_enable_xinggong_wenan": ["inherit", "off"],
+                                "identity_override_xinggong_guanxing_shift_advance_seconds": ["", "-2.5"],
                                 "action_cmd_biguan": ".闭关修炼",
                                 "log_level": "INFO",
                                 "global_sends_per_minute": "6",
@@ -2212,6 +2217,9 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         self.assertIn("消息归档", edit_page.text)
                         self.assertIn("观星劫持", edit_page.text)
                         self.assertIn("身份配置", edit_page.text)
+                        self.assertIn("identity-tabs", edit_page.text)
+                        self.assertIn("身份插件配置", edit_page.text)
+                        self.assertIn("继承账号全局", edit_page.text)
                         self.assertIn("新增化身", edit_page.text)
                         self.assertNotIn("身份组 JSON", edit_page.text)
 
@@ -2241,8 +2249,19 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                                 "enable_xinggong_guanxing": True,
                                 "enable_luoyunzong": False,
                                 "enable_chuangta": True,
+                                "biguan_mode": "deep",
+                                "luoyunzong_status_interval_seconds": 600,
+                                "luoyunzong_watering_strategy": "always",
+                                "enable_xinggong_wenan": False,
+                                "xinggong_guanxing_shift_advance_seconds": -2.5,
                             },
                         )
+                        avatar_config = stored.config.apply_identity("ruifengzi")
+                        self.assertEqual(avatar_config.biguan_mode, "deep")
+                        self.assertEqual(avatar_config.luoyunzong_status_interval_seconds, 600)
+                        self.assertEqual(avatar_config.luoyunzong_watering_strategy, "always")
+                        self.assertFalse(avatar_config.enable_xinggong_wenan)
+                        self.assertEqual(avatar_config.xinggong_guanxing_shift_advance_seconds, -2.5)
 
                         logs_page = await client.get("/accounts/1/logs")
                         self.assertEqual(logs_page.status_code, 200)
