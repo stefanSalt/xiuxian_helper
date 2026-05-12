@@ -337,6 +337,13 @@ class Config:
     wild_explore_strategy: str = "深入"
     wild_explore_repeat_delay_seconds: int = 10
 
+    # Random text
+    enable_random_text: bool = False
+    random_text_messages: str = ""
+    random_text_min_interval_seconds: int = 1800
+    random_text_max_interval_seconds: int = 7200
+    random_text_daily_limit: int = 6
+
     # Shiqie
     enable_shiqie: bool = False
     shiqie_tianji_interval_seconds: int = 12 * 3600
@@ -505,6 +512,15 @@ class Config:
         wild_explore_repeat_delay = data.get("wild_explore_repeat_delay_seconds", 10)
         if str(wild_explore_repeat_delay).strip() == "":
             wild_explore_repeat_delay = 10
+        random_text_min_interval = data.get("random_text_min_interval_seconds", 1800)
+        if str(random_text_min_interval).strip() == "":
+            random_text_min_interval = 1800
+        random_text_max_interval = data.get("random_text_max_interval_seconds", 7200)
+        if str(random_text_max_interval).strip() == "":
+            random_text_max_interval = 7200
+        random_text_daily_limit = data.get("random_text_daily_limit", 6)
+        if str(random_text_daily_limit).strip() == "":
+            random_text_daily_limit = 6
         shiqie_tianji_interval = data.get("shiqie_tianji_interval_seconds", 12 * 3600)
         if str(shiqie_tianji_interval).strip() == "":
             shiqie_tianji_interval = 12 * 3600
@@ -531,6 +547,20 @@ class Config:
             raise ValueError(
                 "luoyunzong_watering_strategy 必须是 match_linggen、always 或 match_need"
             )
+        parsed_random_text_min_interval = max(
+            60,
+            _parse_int(
+                random_text_min_interval,
+                "random_text_min_interval_seconds",
+            ),
+        )
+        parsed_random_text_max_interval = max(
+            parsed_random_text_min_interval,
+            _parse_int(
+                random_text_max_interval,
+                "random_text_max_interval_seconds",
+            ),
+        )
         identities_raw = data.get("identity_profiles")
         identity_profiles: tuple[IdentityProfile, ...]
         if isinstance(identities_raw, list):
@@ -646,6 +676,17 @@ class Config:
                     wild_explore_repeat_delay,
                     "wild_explore_repeat_delay_seconds",
                 ),
+            ),
+            enable_random_text=_parse_bool(
+                data.get("enable_random_text", False),
+                "enable_random_text",
+            ),
+            random_text_messages=str(data.get("random_text_messages", "")).strip(),
+            random_text_min_interval_seconds=parsed_random_text_min_interval,
+            random_text_max_interval_seconds=parsed_random_text_max_interval,
+            random_text_daily_limit=max(
+                0,
+                _parse_int(random_text_daily_limit, "random_text_daily_limit"),
             ),
             enable_shiqie=_parse_bool(data.get("enable_shiqie", False), "enable_shiqie"),
             shiqie_tianji_interval_seconds=max(
@@ -964,6 +1005,20 @@ class Config:
             "wild_explore_repeat_delay_seconds": _get_env_int(
                 "WILD_EXPLORE_REPEAT_DELAY_SECONDS",
                 default=10,
+            ),
+            "enable_random_text": _get_env_bool("ENABLE_RANDOM_TEXT", default=False),
+            "random_text_messages": _get_env_str("RANDOM_TEXT_MESSAGES", default=""),
+            "random_text_min_interval_seconds": _get_env_int(
+                "RANDOM_TEXT_MIN_INTERVAL_SECONDS",
+                default=1800,
+            ),
+            "random_text_max_interval_seconds": _get_env_int(
+                "RANDOM_TEXT_MAX_INTERVAL_SECONDS",
+                default=7200,
+            ),
+            "random_text_daily_limit": _get_env_int(
+                "RANDOM_TEXT_DAILY_LIMIT",
+                default=6,
             ),
             "enable_shiqie": _get_env_bool("ENABLE_SHIQIE", default=False),
             "shiqie_tianji_interval_seconds": _get_env_int(

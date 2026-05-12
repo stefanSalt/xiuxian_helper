@@ -23,6 +23,7 @@ from .plugins.garden import AutoGardenPlugin
 from .plugins.lingxiaogong import AutoLingxiaogongPlugin
 from .plugins.luoyunzong import LuoyunzongPlugin
 from .plugins.random_event import AutoRandomEventPlugin
+from .plugins.random_text import RandomTextPlugin
 from .plugins.shiqie import ShiqiePlugin
 from .plugins.wild_explore import WildExplorePlugin
 from .plugins.xinggong import AutoXinggongPlugin
@@ -37,7 +38,12 @@ class _FocusFilter(logging.Filter):
         if record.levelno >= logging.WARNING:
             return True
         msg = record.getMessage()
-        return msg.startswith(">>") or msg.startswith("<<") or msg.startswith("luoyunzong_")
+        return (
+            msg.startswith(">>")
+            or msg.startswith("<<")
+            or msg.startswith("luoyunzong_")
+            or msg.startswith("random_text_")
+        )
 
 
 _WS_RE = re.compile(r"\s+")
@@ -216,6 +222,7 @@ def build_plugins(config: Config, logger: logging.Logger) -> list[object]:
         AutoChuangtaPlugin(config, logger),
         AutoLingxiaogongPlugin(config, logger),
         AutoRandomEventPlugin(config, logger),
+        RandomTextPlugin(config, logger),
         ShiqiePlugin(config, logger),
         WildExplorePlugin(config, logger),
         LuoyunzongPlugin(config, logger),
@@ -234,6 +241,7 @@ class _IdentityRuntime:
     state_store: SQLiteStateStore
     xinggong: object | None
     yuanying: object | None
+    random_text: object | None
 
 
 @dataclass(frozen=True)
@@ -373,6 +381,7 @@ class AccountRunner:
                 state_store=identity_state_store,
                 xinggong=next((p for p in plugins if getattr(p, "name", "") == "xinggong"), None),
                 yuanying=next((p for p in plugins if getattr(p, "name", "") == "yuanying"), None),
+                random_text=next((p for p in plugins if getattr(p, "name", "") == "random_text"), None),
             )
 
         if self._clear_runtime_pause_on_start:
@@ -472,6 +481,26 @@ class AccountRunner:
                     identity_key=target_key,
                 )
                 _remember_sent(mid, identity_key=target_key, plugin=plugin)
+                random_text = runtime.random_text
+                if mid is not None and plugin != "random_text" and random_text is not None:
+                    next_message = getattr(random_text, "next_message", None)
+                    mark_sent = getattr(random_text, "mark_sent", None)
+                    if callable(next_message) and callable(mark_sent):
+                        random_text_message = next_message()
+                        if isinstance(random_text_message, str) and random_text_message.strip():
+                            random_mid = await sender.send(
+                                "random_text",
+                                random_text_message.strip(),
+                                bool(runtime.config.send_to_topic),
+                                identity_key=target_key,
+                            )
+                            if random_mid is not None:
+                                _remember_sent(
+                                    random_mid,
+                                    identity_key=target_key,
+                                    plugin="random_text",
+                                )
+                                mark_sent()
                 if (
                     mid is not None
                     and target_key != "main"

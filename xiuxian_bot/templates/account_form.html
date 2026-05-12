@@ -69,6 +69,8 @@
               <option value="on" {% if override_value is sameas true %}selected{% endif %}>开启</option>
               <option value="off" {% if override_value is sameas false %}selected{% endif %}>关闭</option>
             </select>
+            {% elif field.type == 'textarea' %}
+            <textarea name="identity_override_{{ field.name }}" rows="4" placeholder="继承账号全局">{% if override_value is not none %}{{ override_value }}{% endif %}</textarea>
             {% else %}
             <input type="{{ field.type }}" name="identity_override_{{ field.name }}" value="{% if override_value is not none %}{{ override_value }}{% endif %}" placeholder="继承账号全局"{% if field.step is defined %} step="{{ field.step }}"{% endif %}>
             {% endif %}
@@ -91,6 +93,9 @@
           {% if field.type == 'checkbox' %}
           <input type="checkbox" name="{{ field.name }}" {% if values.get(field.name) %}checked{% endif %}>
           <span>{{ field.label }}</span>
+          {% elif field.type == 'textarea' %}
+          <span>{{ field.label }}</span>
+          <textarea name="{{ field.name }}" rows="4">{{ values.get(field.name, '') }}</textarea>
           {% else %}
           <span>{{ field.label }}</span>
           <input type="{{ field.type }}" name="{{ field.name }}" value="{{ values.get(field.name, '') }}"{% if field.step is defined %} step="{{ field.step }}"{% endif %}>

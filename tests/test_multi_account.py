@@ -615,6 +615,7 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
         from xiuxian_bot.runtime import AccountRunner
 
         sends: list[tuple[str, str]] = []
+        random_text_marks: list[str] = []
         scheduled_return_main: list[tuple[float, object]] = []
         stop_event = asyncio.Event()
 
@@ -755,9 +756,28 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
                 _ = ctx
                 return None
 
+        class AvatarRandomTextPlugin:
+            name = "random_text"
+            enabled = True
+            priority = 10
+
+            def __init__(self, config, logger) -> None:  # type: ignore[no-untyped-def]
+                self.config = config
+                self.logger = logger
+
+            def next_message(self) -> str:
+                return "化身顺势闲谈"
+
+            def mark_sent(self) -> None:
+                random_text_marks.append(self.config.active_identity_key)
+
+            async def on_message(self, ctx: MessageContext):  # type: ignore[no-untyped-def]
+                _ = ctx
+                return None
+
         def fake_build_plugins(config, logger):  # type: ignore[no-untyped-def]
             if config.my_name == "锐锋子":
-                return [AvatarPlugin(config, logger)]
+                return [AvatarPlugin(config, logger), AvatarRandomTextPlugin(config, logger)]
             return [MainPlugin(config, logger)]
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -798,7 +818,9 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.08)
                 self.assertIn(("__identity__", ".切换 锐锋子"), sends)
                 self.assertIn(("avatar", ".闯塔"), sends)
+                self.assertIn(("random_text", "化身顺势闲谈"), sends)
                 self.assertNotIn(("__identity__", ".切换 主魂"), sends)
+                self.assertEqual(random_text_marks, ["avatar"])
                 self.assertEqual(len(scheduled_return_main), 1)
                 self.assertEqual(scheduled_return_main[0][0], 120.0)
                 await scheduled_return_main[0][1]()
@@ -2096,6 +2118,7 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                                 "enable_message_archive": "on",
                                 "enable_biguan": "on",
                                 "enable_luoyunzong": "on",
+                                "enable_random_text": "on",
                                 "switch_command_template": ".切换 {target}",
                                 "switch_back_target": "主魂",
                                 "switch_success_keywords": "切换成功,神念已附着",
@@ -2117,6 +2140,7 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                                 "identity_override_enable_xinggong": ["inherit", "inherit"],
                                 "identity_override_enable_xinggong_guanxing": ["off", "on"],
                                 "identity_override_enable_yuanying": ["inherit", "inherit"],
+                                "identity_override_enable_random_text": ["inherit", "on"],
                                 "identity_override_enable_luoyunzong": ["inherit", "off"],
                                 "identity_override_enable_chuangta": ["inherit", "on"],
                                 "identity_override_enable_lingxiaogong": ["inherit", "inherit"],
@@ -2124,6 +2148,10 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                                 "identity_override_biguan_mode": ["", "deep"],
                                 "identity_override_luoyunzong_status_interval_seconds": ["", "600"],
                                 "identity_override_luoyunzong_watering_strategy": ["", "always"],
+                                "identity_override_random_text_messages": ["", "化身闲谈一句\n化身闲谈二句"],
+                                "identity_override_random_text_min_interval_seconds": ["", "60"],
+                                "identity_override_random_text_max_interval_seconds": ["", "120"],
+                                "identity_override_random_text_daily_limit": ["", "2"],
                                 "identity_override_enable_xinggong_wenan": ["inherit", "off"],
                                 "identity_override_xinggong_guanxing_shift_advance_seconds": ["", "-2.5"],
                                 "action_cmd_biguan": ".闭关修炼",
@@ -2144,6 +2172,10 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                                 "luoyunzong_watering_required_needs": "木,森,草",
                                 "luoyunzong_linggen_refresh_seconds": "86400",
                                 "luoyunzong_harvest_suppress_seconds": "86400",
+                                "random_text_messages": "全局闲谈一句\n全局闲谈二句",
+                                "random_text_min_interval_seconds": "1800",
+                                "random_text_max_interval_seconds": "7200",
+                                "random_text_daily_limit": "6",
                                 "biguan_cooldown_jitter_min_seconds": "5",
                                 "biguan_cooldown_jitter_max_seconds": "15",
                                 "biguan_retry_jitter_min_seconds": "3",
@@ -2208,6 +2240,8 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         self.assertIn("编辑账号 #1", edit_page.text)
                         self.assertIn("凌霄宫", edit_page.text)
                         self.assertIn("落云宗", edit_page.text)
+                        self.assertIn("随机文本", edit_page.text)
+                        self.assertIn("文本列表", edit_page.text)
                         self.assertIn("灌溉策略", edit_page.text)
                         self.assertIn("自动引九天罡风", edit_page.text)
                         self.assertNotIn("额外系统来源", edit_page.text)
@@ -2233,6 +2267,11 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(stored.config.system_reply_source_usernames, "hantianzunhl,other_source")
                         self.assertTrue(stored.config.enable_message_archive)
                         self.assertTrue(stored.config.enable_luoyunzong)
+                        self.assertTrue(stored.config.enable_random_text)
+                        self.assertEqual(stored.config.random_text_messages, "全局闲谈一句\n全局闲谈二句")
+                        self.assertEqual(stored.config.random_text_min_interval_seconds, 1800)
+                        self.assertEqual(stored.config.random_text_max_interval_seconds, 7200)
+                        self.assertEqual(stored.config.random_text_daily_limit, 6)
                         self.assertEqual(stored.config.luoyunzong_status_interval_seconds, 900)
                         self.assertEqual(stored.config.luoyunzong_watering_strategy, "match_need")
                         self.assertEqual(stored.config.luoyunzong_watering_required_needs, "木,森,草")
@@ -2247,11 +2286,16 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                             {
                                 "enable_biguan": False,
                                 "enable_xinggong_guanxing": True,
+                                "enable_random_text": True,
                                 "enable_luoyunzong": False,
                                 "enable_chuangta": True,
                                 "biguan_mode": "deep",
                                 "luoyunzong_status_interval_seconds": 600,
                                 "luoyunzong_watering_strategy": "always",
+                                "random_text_messages": "化身闲谈一句\n化身闲谈二句",
+                                "random_text_min_interval_seconds": 60,
+                                "random_text_max_interval_seconds": 120,
+                                "random_text_daily_limit": 2,
                                 "enable_xinggong_wenan": False,
                                 "xinggong_guanxing_shift_advance_seconds": -2.5,
                             },
@@ -2260,6 +2304,11 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(avatar_config.biguan_mode, "deep")
                         self.assertEqual(avatar_config.luoyunzong_status_interval_seconds, 600)
                         self.assertEqual(avatar_config.luoyunzong_watering_strategy, "always")
+                        self.assertTrue(avatar_config.enable_random_text)
+                        self.assertEqual(avatar_config.random_text_messages, "化身闲谈一句\n化身闲谈二句")
+                        self.assertEqual(avatar_config.random_text_min_interval_seconds, 60)
+                        self.assertEqual(avatar_config.random_text_max_interval_seconds, 120)
+                        self.assertEqual(avatar_config.random_text_daily_limit, 2)
                         self.assertFalse(avatar_config.enable_xinggong_wenan)
                         self.assertEqual(avatar_config.xinggong_guanxing_shift_advance_seconds, -2.5)
 

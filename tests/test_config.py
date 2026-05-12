@@ -172,6 +172,47 @@ class TestConfig(unittest.TestCase):
                 }
             )
 
+    def test_from_mapping_accepts_random_text_fields_and_identity_override(self) -> None:
+        config = Config.from_mapping(
+            {
+                "tg_api_id": "1",
+                "tg_api_hash": "hash",
+                "tg_session_name": "session",
+                "game_chat_id": "-100",
+                "topic_id": "123",
+                "my_name": "Me",
+                "enable_random_text": "true",
+                "random_text_messages": "全局一句\n全局二句",
+                "random_text_min_interval_seconds": "1800",
+                "random_text_max_interval_seconds": "7200",
+                "random_text_daily_limit": "6",
+                "identity_profiles": [
+                    {"key": "main", "kind": "main", "my_name": "Me"},
+                    {
+                        "key": "avatar",
+                        "kind": "avatar",
+                        "my_name": "化身",
+                        "config_overrides": {
+                            "enable_random_text": True,
+                            "random_text_messages": "化身一句",
+                            "random_text_min_interval_seconds": 60,
+                            "random_text_max_interval_seconds": 120,
+                            "random_text_daily_limit": 2,
+                        },
+                    },
+                ],
+            }
+        )
+
+        self.assertTrue(config.enable_random_text)
+        self.assertEqual(config.random_text_daily_limit, 6)
+        avatar_config = config.apply_identity("avatar")
+        self.assertTrue(avatar_config.enable_random_text)
+        self.assertEqual(avatar_config.random_text_messages, "化身一句")
+        self.assertEqual(avatar_config.random_text_min_interval_seconds, 60)
+        self.assertEqual(avatar_config.random_text_max_interval_seconds, 120)
+        self.assertEqual(avatar_config.random_text_daily_limit, 2)
+
     def test_from_mapping_accepts_shiqie_fields(self) -> None:
         config = Config.from_mapping(
             {
