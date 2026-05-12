@@ -30,6 +30,7 @@ class LuoyunzongPlugin:
     _STATE_KEY = "luoyunzong"
     _GUARD_SUPPRESS_SECONDS = 300
     _HARVEST_STATUS_CHECK_SECONDS = 4 * 3600
+    _PENDING_ACTION_TTL_SECONDS = 5 * 60
     _VALID_WATERING_STRATEGIES = {"match_linggen", "always", "match_need"}
 
     def __init__(
@@ -75,6 +76,7 @@ class LuoyunzongPlugin:
         self._harvest_suppress_until: datetime | None = None
         self._guard_suppress_until: datetime | None = None
         self._pending_action: str | None = None
+        self._pending_action_started_at: datetime | None = None
 
     def set_state_store(self, store: SQLiteStateStore) -> None:
         self._state_store = store
@@ -118,7 +120,7 @@ class LuoyunzongPlugin:
         if self._is_tree_status(text):
             return await self._handle_status(text, ctx.message_id)
 
-        if self._pending_action is not None or self._looks_like_action_feedback(text):
+        if self._looks_like_action_feedback(text):
             await self._handle_action_feedback(text)
             return None
 
@@ -134,7 +136,7 @@ class LuoyunzongPlugin:
                 else None,
                 refresh_default=False,
             )
-            self._pending_action = None
+            self._clear_pending_action()
             await self._schedule_status(self._next_status_delay_seconds())
             self._log_status_decision(status, "already_harvested", "suppress")
             return None
@@ -142,9 +144,10 @@ class LuoyunzongPlugin:
         self._clear_harvest_suppression()
 
         if self._pending_action is not None:
-            await self._schedule_status(float(self._status_interval_seconds))
-            self._log_status_decision(status, f"pending_{self._pending_action}", "skip")
-            return None
+            if not self._expire_pending_action():
+                await self._schedule_status(float(self._status_interval_seconds))
+                self._log_status_decision(status, f"pending_{self._pending_action}", "skip")
+                return None
 
         if status["under_attack"]:
             if self._is_guard_suppressed():
@@ -152,7 +155,7 @@ class LuoyunzongPlugin:
                 self._log_status_decision(status, "guard_suppressed", "skip")
                 return None
             self._guard_suppress_until = self._now() + timedelta(seconds=self._GUARD_SUPPRESS_SECONDS)
-            self._pending_action = "guard"
+            self._set_pending_action("guard")
             self._save_state()
             await self._schedule_status(float(self._status_interval_seconds))
             self._log_status_decision(status, "under_attack", self._CMD_GUARD)
@@ -163,14 +166,14 @@ class LuoyunzongPlugin:
                 await self._schedule_status(self._next_status_delay_seconds())
                 self._log_status_decision(status, "harvest_suppressed", "skip")
                 return None
-            self._pending_action = "harvest"
+            self._set_pending_action("harvest")
             await self._schedule_status(float(self._status_interval_seconds))
             self._log_status_decision(status, "mature", self._CMD_HARVEST)
             return [self._action(self._CMD_HARVEST, message_id)]
 
         should_water, water_reason = self._watering_decision(status["needs"])
         if should_water:
-            self._pending_action = "watering"
+            self._set_pending_action("watering")
             await self._schedule_status(float(self._status_interval_seconds))
             self._log_status_decision(status, water_reason, self._CMD_WATER)
             return [self._action(self._CMD_WATER, message_id)]
@@ -180,31 +183,36 @@ class LuoyunzongPlugin:
         return None
 
     async def _handle_action_feedback(self, text: str) -> None:
-        kind = self._pending_action
+        kind = self._feedback_kind(text)
         remaining: int | None = None
-        if kind == "watering" or "灌溉" in text:
+        if kind == "watering_cooldown":
             remaining = self._parse_duration_seconds(text)
-            if remaining is not None:
-                self._watering_next_at = self._now() + timedelta(seconds=remaining)
-                await self._schedule_status(float(remaining))
-            else:
-                self._watering_next_at = self._now() + timedelta(
-                    seconds=self._watering_cooldown_seconds
-                )
-                await self._schedule_status(float(self._status_interval_seconds))
-        elif kind == "guard" or "协同守山" in text or "守山" in text:
+            if remaining is None:
+                return
+            self._watering_next_at = self._now() + timedelta(seconds=remaining)
+            await self._schedule_status(float(remaining))
+        elif kind == "watering_success":
+            self._watering_next_at = self._now() + timedelta(
+                seconds=self._watering_cooldown_seconds
+            )
+            await self._schedule_status(float(self._status_interval_seconds))
+        elif kind == "watering_unneeded":
+            await self._schedule_status(0.0)
+        elif kind == "guard":
             self._guard_suppress_until = self._now() + timedelta(
                 seconds=self._GUARD_SUPPRESS_SECONDS
             )
-        elif kind == "harvest" or "采摘" in text or "奖励已入袋" in text:
+        elif kind == "harvest":
             self._mark_harvest_suppressed()
             await self._schedule_status(self._next_status_delay_seconds())
-        self._pending_action = None
+        else:
+            return
+        self._clear_pending_action()
         self._save_state()
         self._logger.info(
             "luoyunzong_feedback identity=%s kind=%s remaining_seconds=%s watering_next_at=%s harvest_suppress_until=%s",
             self._identity_key,
-            kind or "unknown",
+            kind,
             remaining if remaining is not None else "-",
             self._format_datetime(self._watering_next_at),
             self._format_datetime(self._harvest_suppress_until),
@@ -269,6 +277,33 @@ class LuoyunzongPlugin:
         if self._guard_suppress_until is None:
             return False
         return (self._guard_suppress_until - self._now()).total_seconds() > 0
+
+    def _set_pending_action(self, action: str) -> None:
+        self._pending_action = action
+        self._pending_action_started_at = self._now()
+
+    def _clear_pending_action(self) -> None:
+        self._pending_action = None
+        self._pending_action_started_at = None
+
+    def _expire_pending_action(self) -> bool:
+        if self._pending_action is None:
+            return False
+        if self._pending_action_started_at is None:
+            self._pending_action_started_at = self._now()
+            return False
+        age = (self._now() - self._pending_action_started_at).total_seconds()
+        if age < self._PENDING_ACTION_TTL_SECONDS:
+            return False
+        expired_action = self._pending_action
+        self._clear_pending_action()
+        self._logger.warning(
+            "luoyunzong_pending_expired identity=%s action=%s age_seconds=%.1f",
+            self._identity_key,
+            expired_action,
+            age,
+        )
+        return True
 
     def _linggen_needs_refresh(self) -> bool:
         if not self._linggen or self._linggen_refreshed_at is None:
@@ -411,8 +446,41 @@ class LuoyunzongPlugin:
             or "请速用 .协同守山" in text
         )
 
+    def _feedback_kind(self, text: str) -> str | None:
+        if self._is_watering_unneeded_feedback(text):
+            return "watering_unneeded"
+        if self._is_watering_cooldown_feedback(text):
+            return "watering_cooldown"
+        if self._is_watering_success_feedback(text):
+            return "watering_success"
+        if "协同守山" in text or "守山" in text:
+            return "guard"
+        if "采摘灵果" in text or "采摘" in text or "奖励已入袋" in text:
+            return "harvest"
+        return None
+
+    def _is_watering_success_feedback(self, text: str) -> bool:
+        return "灵树灌溉" in text and "成熟度" in text and "->" in text
+
+    def _is_watering_cooldown_feedback(self, text: str) -> bool:
+        return "灌溉" in text and "请在" in text and "后再来" in text
+
+    def _is_watering_unneeded_feedback(self, text: str) -> bool:
+        return "灵眼之树已然成熟或正遭劫难" in text and "无需灌溉" in text
+
     def _looks_like_action_feedback(self, text: str) -> bool:
-        return any(token in text for token in ("灵树灌溉", "协同守山", "采摘灵果", "奖励已入袋"))
+        return any(
+            token in text
+            for token in (
+                "灵树灌溉",
+                "地脉灵气尚未恢复",
+                "后再来灌溉",
+                "无需灌溉",
+                "协同守山",
+                "采摘灵果",
+                "奖励已入袋",
+            )
+        )
 
     def _parse_duration_seconds(self, text: str) -> int | None:
         matched = False

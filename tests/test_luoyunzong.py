@@ -1,9 +1,12 @@
 import logging
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from xiuxian_bot.config import Config
 from xiuxian_bot.core.contracts import MessageContext
+from xiuxian_bot.core.state_store import SQLiteStateStore
 from xiuxian_bot.plugins.luoyunzong import LuoyunzongPlugin
 from xiuxian_bot.runtime import build_plugins
 
@@ -87,6 +90,20 @@ HARVESTED_STATUS_WITH_REMAINING = """【落云宗 · 灵眼之树】
 ⏳ 剩余: 19小时40分钟10秒
 👤 你的当前状态: 已采摘 (奖励已入袋)
 """
+
+WATERING_SUCCESS = """【🌿 灵树灌溉】
+当前环境: 生机萎靡 (需 木/森/草)
+你注入了: 木行 灵气
+💫 灵息相应 (多属性灵根找准了这一轮的发力方向)
+------------------------------
+🌳 成熟度: 66.38% -> 66.48%
+🏅 宗门贡献: +30
+🌱 养树底蕴 +10
+🛡️ 护山底蕴 +2
+"""
+
+WATERING_COOLDOWN = "地脉灵气尚未恢复，请在 1小时57分钟36秒 后再来灌溉。"
+WATERING_UNNEEDED = "灵眼之树已然成熟或正遭劫难，此刻无需灌溉，静待或守护即可。"
 
 
 class TestLuoyunzongPlugin(unittest.IsolatedAsyncioTestCase):
@@ -312,9 +329,13 @@ class TestLuoyunzongPlugin(unittest.IsolatedAsyncioTestCase):
 
         await plugin.bootstrap(_FakeScheduler(), _send)
         await plugin.on_message(_ctx(NORMAL_STATUS))
-        await plugin.on_message(_ctx("灵树灌溉冷却中，请在 1小时59分钟45秒 后再来。"))
+        await plugin.on_message(_ctx(WATERING_COOLDOWN))
 
-        self.assertIn((7200.0, 7185.0), [(7200.0, delay) for _, delay, _ in calls])
+        self.assertIn(7056.0, [delay for _, delay, _ in calls])
+        self.assertEqual(  # type: ignore[attr-defined]
+            plugin._watering_next_at,
+            base_now + timedelta(hours=1, minutes=57, seconds=36),
+        )
 
     async def test_watering_state_waits_for_feedback(self) -> None:
         base_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
@@ -332,11 +353,103 @@ class TestLuoyunzongPlugin(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(plugin._watering_next_at)  # type: ignore[attr-defined]
         self.assertIsNone(second_actions)
 
-        await plugin.on_message(_ctx("【✂️ 灵树灌溉】 成熟度: 0.95% -> 1.05%"))
+        await plugin.on_message(_ctx(WATERING_SUCCESS))
         self.assertEqual(  # type: ignore[attr-defined]
             plugin._watering_next_at,
             base_now + timedelta(seconds=7200),
         )
+
+    async def test_watering_pending_ignores_unrelated_messages(self) -> None:
+        base_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+        plugin = LuoyunzongPlugin(
+            _dummy_config(luoyunzong_watering_strategy="always"),
+            logging.getLogger("test"),
+            now_fn=lambda: base_now,
+        )
+
+        await plugin.on_message(_ctx(NORMAL_STATUS))
+        await plugin.on_message(_ctx("📊 天道股市 · 实时行情"))
+
+        self.assertEqual(plugin._pending_action, "watering")  # type: ignore[attr-defined]
+        self.assertIsNone(plugin._watering_next_at)  # type: ignore[attr-defined]
+
+        await plugin.on_message(_ctx(WATERING_SUCCESS))
+        self.assertEqual(  # type: ignore[attr-defined]
+            plugin._watering_next_at,
+            base_now + timedelta(seconds=7200),
+        )
+
+    async def test_watering_unneeded_feedback_does_not_refresh_cooldown(self) -> None:
+        base_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+        plugin = LuoyunzongPlugin(
+            _dummy_config(luoyunzong_watering_strategy="always"),
+            logging.getLogger("test"),
+            now_fn=lambda: base_now,
+        )
+        calls: list[tuple[str, float, object]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                calls.append((key, delay_seconds, action))
+
+        async def _send(_plugin: str, _text: str, _reply_to_topic: bool) -> int | None:
+            return None
+
+        await plugin.bootstrap(_FakeScheduler(), _send)
+        await plugin.on_message(_ctx(NORMAL_STATUS))
+        await plugin.on_message(_ctx(WATERING_UNNEEDED))
+
+        self.assertIsNone(plugin._pending_action)  # type: ignore[attr-defined]
+        self.assertIsNone(plugin._watering_next_at)  # type: ignore[attr-defined]
+        self.assertIn(("luoyunzong.status.loop", 0.0), [(key, delay) for key, delay, _ in calls])
+
+    async def test_pending_watering_expires_and_allows_retry(self) -> None:
+        current_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+        plugin = LuoyunzongPlugin(
+            _dummy_config(luoyunzong_watering_strategy="always"),
+            logging.getLogger("test"),
+            now_fn=lambda: current_now,
+        )
+
+        actions = await plugin.on_message(_ctx(NORMAL_STATUS))
+        current_now = current_now + timedelta(minutes=6)
+        retry_actions = await plugin.on_message(_ctx(NORMAL_STATUS))
+
+        assert actions is not None
+        assert retry_actions is not None
+        self.assertEqual([action.text for action in actions], [".灵树灌溉"])
+        self.assertEqual([action.text for action in retry_actions], [".灵树灌溉"])
+
+    async def test_watering_state_is_scoped_by_identity_store(self) -> None:
+        base_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "state.sqlite3"
+            store_a = SQLiteStateStore(str(path), account_id="1:avatar_a")
+            store_b = SQLiteStateStore(str(path), account_id="1:avatar_b")
+            plugin_a = LuoyunzongPlugin(
+                _dummy_config(luoyunzong_watering_strategy="always"),
+                logging.getLogger("test"),
+                now_fn=lambda: base_now,
+            )
+            plugin_b = LuoyunzongPlugin(
+                _dummy_config(luoyunzong_watering_strategy="always"),
+                logging.getLogger("test"),
+                now_fn=lambda: base_now,
+            )
+            plugin_a.set_state_store(store_a)
+            plugin_b.set_state_store(store_b)
+
+            await plugin_a.on_message(_ctx(NORMAL_STATUS))
+            await plugin_a.on_message(_ctx(WATERING_SUCCESS))
+            plugin_b.restore_state()
+
+            self.assertEqual(  # type: ignore[attr-defined]
+                plugin_a._watering_next_at,
+                base_now + timedelta(seconds=7200),
+            )
+            self.assertIsNone(plugin_b._watering_next_at)  # type: ignore[attr-defined]
+            store_a.close()
+            store_b.close()
 
     async def test_status_decision_logs_skip_reason(self) -> None:
         plugin = LuoyunzongPlugin(
