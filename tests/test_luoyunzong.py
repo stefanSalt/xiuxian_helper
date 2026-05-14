@@ -401,6 +401,29 @@ class TestLuoyunzongPlugin(unittest.IsolatedAsyncioTestCase):
             base_now + timedelta(hours=1, minutes=57, seconds=36),
         )
 
+    async def test_watering_cooldown_status_reschedules_at_cooldown_end(self) -> None:
+        base_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+        plugin = LuoyunzongPlugin(
+            _dummy_config(luoyunzong_watering_strategy="always"),
+            logging.getLogger("test"),
+            now_fn=lambda: base_now,
+        )
+        plugin._watering_next_at = base_now + timedelta(minutes=11)  # type: ignore[attr-defined]
+        calls: list[tuple[str, float, object]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                calls.append((key, delay_seconds, action))
+
+        async def _send(_plugin: str, _text: str, _reply_to_topic: bool) -> int | None:
+            return None
+
+        await plugin.bootstrap(_FakeScheduler(), _send)
+        actions = await plugin.on_message(_ctx(NORMAL_STATUS))
+
+        self.assertIsNone(actions)
+        self.assertIn(660.0, [delay for _, delay, _ in calls])
+
     async def test_watering_state_waits_for_feedback(self) -> None:
         base_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
         plugin = LuoyunzongPlugin(
@@ -585,6 +608,63 @@ class TestLuoyunzongPlugin(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("luoyunzong.status.loop", [key for key, _, _ in calls_b])
             self.assertIn("luoyunzong.linggen.loop", [key for key, _, _ in calls_a])
             self.assertIn("luoyunzong.linggen.loop", [key for key, _, _ in calls_b])
+            root.close()
+
+    async def test_earlier_watering_cooldown_can_take_status_owner(self) -> None:
+        base_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "state.sqlite3"
+            root = SQLiteStateStore(str(path), account_id="root")
+            global_store = root.for_account("__global__:luoyunzong")
+            plugin_a = LuoyunzongPlugin(
+                _dummy_config(account_id="1", active_identity_key="avatar_a"),
+                logging.getLogger("test"),
+                now_fn=lambda: base_now,
+            )
+            plugin_b = LuoyunzongPlugin(
+                _dummy_config(
+                    account_id="2",
+                    active_identity_key="avatar_b",
+                    luoyunzong_watering_strategy="always",
+                ),
+                logging.getLogger("test"),
+                now_fn=lambda: base_now,
+            )
+            plugin_a.set_state_store(root.for_account("1:avatar_a"))
+            plugin_b.set_state_store(root.for_account("2:avatar_b"))
+            plugin_a.set_global_state_store(global_store)
+            plugin_b.set_global_state_store(global_store)
+            plugin_a.restore_state()
+            plugin_b.restore_state()
+            calls_a: list[tuple[str, float, object]] = []
+            calls_b: list[tuple[str, float, object]] = []
+
+            class _FakeSchedulerA:
+                async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                    calls_a.append((key, delay_seconds, action))
+
+            class _FakeSchedulerB:
+                async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                    calls_b.append((key, delay_seconds, action))
+
+            async def _send(_plugin: str, _text: str, _reply_to_topic: bool) -> int | None:
+                return None
+
+            await plugin_a.bootstrap(_FakeSchedulerA(), _send)
+            await plugin_b.bootstrap(_FakeSchedulerB(), _send)
+            calls_a.clear()
+            calls_b.clear()
+
+            await plugin_a.on_global_status(_ctx(NORMAL_STATUS))
+            plugin_b._watering_next_at = base_now + timedelta(minutes=2)  # type: ignore[attr-defined]
+            actions_b = await plugin_b.on_global_status(_ctx(NORMAL_STATUS))
+
+            self.assertIsNone(actions_b)
+            self.assertIn(120.0, [delay for _, delay, _ in calls_b])
+            self.assertEqual(
+                global_store.load_state("luoyunzong")["status_owner"],
+                plugin_b._status_owner_key,  # type: ignore[attr-defined]
+            )
             root.close()
 
     async def test_status_decision_logs_skip_reason(self) -> None:

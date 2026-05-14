@@ -86,6 +86,7 @@ class LuoyunzongPlugin:
         self._pending_action_started_at: datetime | None = None
         self._status_owner: str | None = None
         self._status_owner_until: datetime | None = None
+        self._status_owner_next_at: datetime | None = None
         self._last_status_seen_at: datetime | None = None
         self._last_status_needs: list[str] = []
         self._last_status_mature = False
@@ -246,7 +247,7 @@ class LuoyunzongPlugin:
             self._log_status_decision(status, water_reason, self._CMD_WATER)
             return [self._action(self._CMD_WATER, message_id)]
 
-        await self._schedule_status(float(self._status_interval_seconds))
+        await self._schedule_status(self._status_delay_after_decision(water_reason))
         self._log_status_decision(status, water_reason, "skip")
         return None
 
@@ -374,10 +375,22 @@ class LuoyunzongPlugin:
             return delay
         return float(self._status_interval_seconds)
 
+    def _status_delay_after_decision(self, reason: str) -> float:
+        if reason == "watering_cooldown":
+            remaining = self._watering_cooldown_remaining_seconds()
+            if remaining > 0:
+                return min(remaining, float(self._status_interval_seconds))
+        return float(self._status_interval_seconds)
+
     def _harvest_remaining_seconds(self) -> float:
         if self._harvest_suppress_until is None:
             return 0.0
         return max(0.0, (self._harvest_suppress_until - self._now()).total_seconds())
+
+    def _watering_cooldown_remaining_seconds(self) -> float:
+        if self._watering_next_at is None:
+            return 0.0
+        return max(0.0, (self._watering_next_at - self._now()).total_seconds())
 
     def _is_harvest_suppressed(self) -> bool:
         return self._harvest_remaining_seconds() > 0
@@ -398,19 +411,29 @@ class LuoyunzongPlugin:
             return True
         self._load_global_state()
         now = self._now()
+        requested_next_at = now + timedelta(seconds=max(0.0, float(delay_seconds)))
         if (
             self._status_owner
             and self._status_owner != self._status_owner_key
             and self._status_owner_until is not None
             and self._status_owner_until > now
+            and not self._can_preempt_status_owner(requested_next_at, now)
         ):
             return False
         self._status_owner = self._status_owner_key
+        self._status_owner_next_at = requested_next_at
         self._status_owner_until = now + timedelta(
             seconds=self._status_owner_ttl_seconds(delay_seconds)
         )
         self._save_global_state()
         return True
+
+    def _can_preempt_status_owner(self, requested_next_at: datetime, now: datetime) -> bool:
+        if self._status_owner_next_at is None:
+            return False
+        if self._status_owner_next_at < now - timedelta(seconds=1):
+            return True
+        return requested_next_at < self._status_owner_next_at - timedelta(seconds=1)
 
     def _set_pending_action(self, action: str) -> None:
         self._pending_action = action
@@ -496,6 +519,7 @@ class LuoyunzongPlugin:
         state = self._global_state_store.load_state(self._STATE_KEY)
         self._status_owner = str(state.get("status_owner", "") or "") or None
         self._status_owner_until = deserialize_datetime(state.get("status_owner_until"))
+        self._status_owner_next_at = deserialize_datetime(state.get("status_owner_next_at"))
         self._last_status_seen_at = deserialize_datetime(state.get("last_status_seen_at"))
         raw_needs = state.get("last_status_needs", [])
         if isinstance(raw_needs, list):
@@ -513,6 +537,7 @@ class LuoyunzongPlugin:
             {
                 "status_owner": self._status_owner,
                 "status_owner_until": serialize_datetime(self._status_owner_until),
+                "status_owner_next_at": serialize_datetime(self._status_owner_next_at),
                 "last_status_seen_at": serialize_datetime(self._last_status_seen_at),
                 "last_status_needs": self._last_status_needs,
                 "last_status_mature": self._last_status_mature,
