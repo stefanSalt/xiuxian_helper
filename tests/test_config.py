@@ -126,6 +126,7 @@ class TestConfig(unittest.TestCase):
                 "topic_id": "123",
                 "my_name": "Me",
                 "enable_daily": "true",
+                "daily_bushi_start_time": "8:30",
                 "daily_bushi_times_per_day": "7",
                 "daily_bushi_interval_seconds": "90",
                 "daily_bushi_exchange_action": ".换取",
@@ -133,6 +134,7 @@ class TestConfig(unittest.TestCase):
         )
 
         self.assertTrue(config.enable_daily)
+        self.assertEqual(config.daily_bushi_start_time, "08:30")
         self.assertEqual(config.daily_bushi_times_per_day, 7)
         self.assertEqual(config.daily_bushi_interval_seconds, 120)
         self.assertEqual(config.daily_bushi_exchange_action, ".换取")

@@ -54,7 +54,7 @@ class TestWildExplorePlugin(unittest.IsolatedAsyncioTestCase):
         await plugin.bootstrap(_FakeScheduler(), _send)
         self.assertEqual(calls, [("wild_explore.loop", 0.0)])
 
-    async def test_loop_sends_configured_strategy_twice_and_reschedules(self) -> None:
+    async def test_loop_sends_configured_strategy_once_and_reschedules(self) -> None:
         plugin = WildExplorePlugin(
             _dummy_config(
                 wild_explore_interval_seconds="7200",
@@ -77,14 +77,10 @@ class TestWildExplorePlugin(unittest.IsolatedAsyncioTestCase):
         await plugin.bootstrap(_FakeScheduler(), _send)
         await calls[0][2]()
         self.assertEqual(sends, [".野外历练 谨慎"])
-        self.assertIn(("wild_explore.repeat", 7.0), [(key, delay) for key, delay, _ in calls])
+        self.assertNotIn("wild_explore.repeat", {key for key, _, _ in calls})
         self.assertIn(("wild_explore.loop", 7200.0), [(key, delay) for key, delay, _ in calls])
 
-        repeat_action = next(action for key, _, action in calls if key == "wild_explore.repeat")
-        await repeat_action()
-        self.assertEqual(sends, [".野外历练 谨慎", ".野外历练 谨慎"])
-
-    async def test_zero_repeat_delay_sends_twice_without_repeat_schedule(self) -> None:
+    async def test_zero_repeat_delay_still_sends_once_without_repeat_schedule(self) -> None:
         plugin = WildExplorePlugin(
             _dummy_config(wild_explore_repeat_delay_seconds="0"),
             logging.getLogger("test"),
@@ -102,7 +98,7 @@ class TestWildExplorePlugin(unittest.IsolatedAsyncioTestCase):
 
         await plugin.bootstrap(_FakeScheduler(), _send)
         await calls[0][2]()
-        self.assertEqual(sends, [".野外历练 深入", ".野外历练 深入"])
+        self.assertEqual(sends, [".野外历练 深入"])
         self.assertNotIn("wild_explore.repeat", {key for key, _, _ in calls})
 
     async def test_cooldown_feedback_reschedules_after_remaining_time(self) -> None:

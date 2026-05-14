@@ -17,6 +17,7 @@ def _dummy_config(**overrides) -> Config:
         "my_name": "Me",
         "send_to_topic": "true",
         "enable_daily": "true",
+        "daily_bushi_start_time": "00:00",
         "daily_bushi_times_per_day": "5",
         "daily_bushi_interval_seconds": "120",
         "daily_bushi_exchange_action": ".换取",
@@ -26,6 +27,21 @@ def _dummy_config(**overrides) -> Config:
 
 
 class TestDailyPlugin(unittest.IsolatedAsyncioTestCase):
+    def test_start_time_calculates_initial_delay(self) -> None:
+        plugin = DailyPlugin(
+            _dummy_config(daily_bushi_start_time="08:30"),
+            logging.getLogger("test"),
+        )
+
+        self.assertEqual(
+            plugin._initial_bushi_delay_seconds(datetime(2026, 5, 14, 7, 0, 0)),  # type: ignore[attr-defined]
+            5400.0,
+        )
+        self.assertEqual(
+            plugin._initial_bushi_delay_seconds(datetime(2026, 5, 14, 8, 30, 0)),  # type: ignore[attr-defined]
+            0.0,
+        )
+
     async def test_bootstrap_sends_remaining_bushi_with_interval(self) -> None:
         plugin = DailyPlugin(
             _dummy_config(daily_bushi_times_per_day="2"),

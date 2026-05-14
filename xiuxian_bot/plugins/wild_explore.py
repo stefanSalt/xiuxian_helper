@@ -12,14 +12,13 @@ SendFn = Callable[[str, str, bool], Awaitable[int | None]]
 
 
 class WildExplorePlugin:
-    """野外历练：按固定间隔发送历练指令，并补发一次。"""
+    """野外历练：按固定间隔发送历练指令。"""
 
     name = "wild_explore"
     priority = 10
 
     _CMD_EXPLORE = ".野外历练"
     _LOOP_KEY = "wild_explore.loop"
-    _REPEAT_KEY = "wild_explore.repeat"
     _TITLE = "【野外历练】"
 
     def __init__(self, config: Config, logger: logging.Logger) -> None:
@@ -27,7 +26,6 @@ class WildExplorePlugin:
         self.enabled = bool(config.enable_wild_explore)
         self._strategy = config.wild_explore_strategy
         self._interval_seconds = max(60, int(config.wild_explore_interval_seconds))
-        self._repeat_delay_seconds = max(0, int(config.wild_explore_repeat_delay_seconds))
         self._scheduler: Scheduler | None = None
         self._send: SendFn | None = None
 
@@ -85,19 +83,6 @@ class WildExplorePlugin:
             action=_runner,
         )
 
-    async def _schedule_repeat(self) -> None:
-        if self._scheduler is None:
-            return
-
-        async def _runner() -> None:
-            await self._send_command()
-
-        await self._scheduler.schedule(
-            key=self._REPEAT_KEY,
-            delay_seconds=float(self._repeat_delay_seconds),
-            action=_runner,
-        )
-
     async def _send_command(self) -> None:
         if not self.enabled or self._send is None:
             return
@@ -107,8 +92,4 @@ class WildExplorePlugin:
         if not self.enabled or self._send is None:
             return
         await self._send_command()
-        if self._repeat_delay_seconds > 0:
-            await self._schedule_repeat()
-        else:
-            await self._send_command()
         await self._schedule_loop(float(self._interval_seconds))

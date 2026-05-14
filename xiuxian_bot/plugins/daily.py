@@ -40,6 +40,7 @@ class DailyPlugin:
         self._current_day: date | None = None
         self._bushi_count_today = 0
         self._handled_rare_message_ids: set[int] = set()
+        self._start_hm = self._parse_hhmm(config.daily_bushi_start_time)
 
     def set_state_store(self, state_store: SQLiteStateStore) -> None:
         self._state_store = state_store
@@ -79,10 +80,32 @@ class DailyPlugin:
     def _remaining_today(self) -> int:
         return max(0, self._config.daily_bushi_times_per_day - self._bushi_count_today)
 
-    def _seconds_until_next_day(self, now: datetime) -> float:
+    def _parse_hhmm(self, value: str) -> tuple[int, int]:
+        parts = (value or "").strip().split(":", 1)
+        if len(parts) != 2:
+            raise ValueError(f"Invalid DAILY_BUSHI_START_TIME={value!r}; expected HH:MM")
+        try:
+            hour = int(parts[0])
+            minute = int(parts[1])
+        except ValueError as exc:
+            raise ValueError(f"Invalid DAILY_BUSHI_START_TIME={value!r}; expected HH:MM") from exc
+        if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+            raise ValueError(f"Invalid DAILY_BUSHI_START_TIME={value!r}; expected HH:MM")
+        return hour, minute
+
+    def _target_at(self, day: date) -> datetime:
+        hour, minute = self._start_hm
+        return datetime(day.year, day.month, day.day, hour, minute)
+
+    def _initial_bushi_delay_seconds(self, now: datetime) -> float:
+        target = self._target_at(now.date())
+        if now < target:
+            return max(0.0, (target - now).total_seconds())
+        return 0.0
+
+    def _seconds_until_next_day_start(self, now: datetime) -> float:
         tomorrow = now.date() + timedelta(days=1)
-        next_day = datetime(tomorrow.year, tomorrow.month, tomorrow.day)
-        return max(0.0, (next_day - now).total_seconds())
+        return max(0.0, (self._target_at(tomorrow) - now).total_seconds())
 
     async def bootstrap(self, scheduler: Scheduler, send: SendFn) -> None:
         if not self.enabled:
@@ -91,9 +114,9 @@ class DailyPlugin:
         self._send = send
         now = datetime.now()
         self._reset_if_new_day(now)
-        await self._schedule_next_day_reset(self._seconds_until_next_day(now))
+        await self._schedule_next_day_reset(self._seconds_until_next_day_start(now))
         if self._remaining_today() > 0:
-            await self._schedule_bushi_loop(0.0)
+            await self._schedule_bushi_loop(self._initial_bushi_delay_seconds(now))
 
     async def _schedule_bushi_loop(self, delay_seconds: float) -> None:
         if self._scheduler is None:
@@ -124,14 +147,19 @@ class DailyPlugin:
     async def _next_day_loop(self) -> None:
         now = datetime.now()
         self._reset_if_new_day(now)
-        await self._schedule_next_day_reset(self._seconds_until_next_day(now))
+        await self._schedule_next_day_reset(self._seconds_until_next_day_start(now))
         if self._remaining_today() > 0:
             await self._schedule_bushi_loop(0.0)
 
     async def _bushi_loop(self) -> None:
         if not self.enabled or self._send is None:
             return
-        self._reset_if_new_day(datetime.now())
+        now = datetime.now()
+        self._reset_if_new_day(now)
+        start_delay = self._initial_bushi_delay_seconds(now)
+        if start_delay > 0:
+            await self._schedule_bushi_loop(start_delay)
+            return
         if self._remaining_today() <= 0:
             return
         self._bushi_count_today += 1

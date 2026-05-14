@@ -104,6 +104,21 @@ def _parse_optional_str(value: Any) -> str | None:
     return text or None
 
 
+def _parse_hhmm(value: Any, label: str, *, default: str) -> str:
+    text = str(value if value is not None else default).strip() or default
+    parts = text.split(":", 1)
+    if len(parts) != 2:
+        raise ValueError(f"{label} 必须是 HH:MM 格式")
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except ValueError as exc:
+        raise ValueError(f"{label} 必须是 HH:MM 格式") from exc
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        raise ValueError(f"{label} 必须是 HH:MM 格式")
+    return f"{hour:02d}:{minute:02d}"
+
+
 LEGACY_ACCOUNT_ENV_KEYS = (
     "TG_API_ID",
     "TG_API_HASH",
@@ -330,6 +345,7 @@ class Config:
     daily_bushi_times_per_day: int = 5
     daily_bushi_interval_seconds: int = 120
     daily_bushi_exchange_action: str = ".换取"
+    daily_bushi_start_time: str = "08:00"
 
     # Wild explore
     enable_wild_explore: bool = False
@@ -658,6 +674,11 @@ class Config:
                 data.get("daily_bushi_exchange_action", ".换取")
             ).strip()
             or ".换取",
+            daily_bushi_start_time=_parse_hhmm(
+                data.get("daily_bushi_start_time", "08:00"),
+                "daily_bushi_start_time",
+                default="08:00",
+            ),
             enable_wild_explore=_parse_bool(
                 data.get("enable_wild_explore", False),
                 "enable_wild_explore",
@@ -995,6 +1016,10 @@ class Config:
             "daily_bushi_exchange_action": _get_env_str(
                 "DAILY_BUSHI_EXCHANGE_ACTION",
                 default=".换取",
+            ),
+            "daily_bushi_start_time": _get_env_str(
+                "DAILY_BUSHI_START_TIME",
+                default="08:00",
             ),
             "enable_wild_explore": _get_env_bool("ENABLE_WILD_EXPLORE", default=False),
             "wild_explore_interval_seconds": _get_env_int(

@@ -163,6 +163,7 @@ FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
     (
         "日常",
         [
+            {"name": "daily_bushi_start_time", "label": "卜筮问天起始时间(HH:MM)", "type": "text"},
             {"name": "daily_bushi_times_per_day", "label": "卜筮问天每日次数(0-10)", "type": "number"},
             {"name": "daily_bushi_interval_seconds", "label": "卜筮问天间隔(秒，至少120)", "type": "number"},
             {"name": "daily_bushi_exchange_action", "label": "神物现世换取指令", "type": "text"},
@@ -173,7 +174,6 @@ FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
         [
             {"name": "wild_explore_strategy", "label": "历练策略(谨慎/均衡/深入)", "type": "text"},
             {"name": "wild_explore_interval_seconds", "label": "历练间隔(秒)", "type": "number"},
-            {"name": "wild_explore_repeat_delay_seconds", "label": "补发延迟(秒)", "type": "number"},
         ],
     ),
     (
@@ -356,12 +356,12 @@ def _template_values_for_new(system_config: SystemConfig) -> dict[str, Any]:
         "biguan_cooldown_jitter_max_seconds": 15,
         "biguan_retry_jitter_min_seconds": 3,
         "biguan_retry_jitter_max_seconds": 8,
+        "daily_bushi_start_time": "08:00",
         "daily_bushi_times_per_day": 5,
         "daily_bushi_interval_seconds": 120,
         "daily_bushi_exchange_action": ".换取",
         "wild_explore_strategy": "深入",
         "wild_explore_interval_seconds": 7200,
-        "wild_explore_repeat_delay_seconds": 10,
         "random_text_messages": "",
         "random_text_min_interval_seconds": 1800,
         "random_text_max_interval_seconds": 7200,
