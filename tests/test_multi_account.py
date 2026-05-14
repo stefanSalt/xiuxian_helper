@@ -2012,6 +2012,175 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
             )
             repo.close()
 
+    async def test_account_runner_routes_lingxiaogong_status_to_pending_main_identity(self) -> None:
+        from xiuxian_bot.plugins.lingxiaogong import AutoLingxiaogongPlugin
+        from xiuxian_bot.runtime import AccountRunner
+
+        sends: list[str] = []
+        scheduled_tasks: list[asyncio.Task[None]] = []
+
+        class FakeScheduler:
+            def __init__(self, logger) -> None:  # type: ignore[no-untyped-def]
+                self.logger = logger
+
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                _ = (key, delay_seconds, action)
+
+            async def cancel_all(self) -> None:
+                for task in scheduled_tasks:
+                    task.cancel()
+                if scheduled_tasks:
+                    await asyncio.gather(*scheduled_tasks, return_exceptions=True)
+
+        class FakeAdapter:
+            def __init__(self, config, logger, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                _ = (logger, kwargs)
+                self.config = config
+                self.me_id = 1
+                self._new_handler = None
+
+            def on_new_message(self, handler) -> None:  # type: ignore[no-untyped-def]
+                self._new_handler = handler
+
+            def on_message_edited(self, handler) -> None:  # type: ignore[no-untyped-def]
+                _ = handler
+
+            async def start(self) -> None:
+                return None
+
+            async def send_message(
+                self,
+                text: str,
+                *,
+                reply_to_topic: bool = True,
+                reply_to_msg_id: int | None = None,
+            ) -> int | None:
+                _ = (reply_to_topic, reply_to_msg_id)
+                sends.append(text)
+                msg_id = 100 + len(sends)
+                if text == ".天阶状态":
+                    scheduled_tasks.append(asyncio.create_task(self._emit_status_without_binding()))
+                elif text == ".切换 主魂":
+                    scheduled_tasks.append(asyncio.create_task(self._emit_switch_back(msg_id)))
+                return msg_id
+
+            async def _emit_status_without_binding(self) -> None:
+                await asyncio.sleep(0)
+                await self._new_handler(
+                    MessageContext(
+                        chat_id=-100,
+                        message_id=900,
+                        reply_to_msg_id=None,
+                        sender_id=999,
+                        text="切换成功！你的神念已附着在 【锐锋子】 之上。",
+                        ts=datetime.now(timezone.utc),
+                        is_reply=False,
+                        is_reply_to_me=False,
+                    )
+                )
+                await self._new_handler(
+                    MessageContext(
+                        chat_id=-100,
+                        message_id=901,
+                        reply_to_msg_id=self.config.topic_id,
+                        sender_id=10001,
+                        text="""【凌霄云阶】
+当前进度: 4 / 12 阶
+已完成周天: 1 轮
+罡风淬体: 3 / 12 层
+登阶冷却: 0秒
+问心状态: 今日尚未问心。可使用 .问心台 获取登阶加持。
+""",
+                        ts=datetime.now(timezone.utc),
+                        is_reply=True,
+                        is_reply_to_me=False,
+                        is_from_system_identity=True,
+                        is_system_reply=False,
+                    )
+                )
+
+            async def _emit_switch_back(self, reply_to_msg_id: int) -> None:
+                await asyncio.sleep(0)
+                await self._new_handler(
+                    MessageContext(
+                        chat_id=-100,
+                        message_id=902,
+                        reply_to_msg_id=reply_to_msg_id,
+                        sender_id=999,
+                        text="你已收回神通，神念重归主魂肉身。",
+                        ts=datetime.now(timezone.utc),
+                        is_reply=True,
+                        is_reply_to_me=True,
+                    )
+                )
+
+            async def build_context(self, event) -> MessageContext:  # type: ignore[no-untyped-def]
+                return event
+
+            async def run_forever(self) -> None:
+                await asyncio.sleep(0.15)
+
+            async def stop(self) -> None:
+                return None
+
+        class FakeSender:
+            def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                self.kwargs = kwargs
+
+            async def send(
+                self,
+                plugin: str,
+                text: str,
+                reply_to_topic: bool,
+                *,
+                reply_to_msg_id: int | None = None,
+                identity_key: str | None = None,
+            ) -> int | None:
+                _ = (plugin, identity_key)
+                return await self.kwargs["send_message"](
+                    text,
+                    reply_to_topic=reply_to_topic,
+                    reply_to_msg_id=reply_to_msg_id,
+                )
+
+        def fake_build_plugins(config, logger):  # type: ignore[no-untyped-def]
+            if config.my_name == "寒山子":
+                return [AutoLingxiaogongPlugin(config, logger)]
+            return []
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "app.sqlite3"
+            repo = AccountRepository(str(path), logging.getLogger("test"))
+            config = _dummy_config(
+                my_name="寒山子",
+                enable_lingxiaogong=True,
+                enable_lingxiaogong_wenxintai=True,
+                enable_lingxiaogong_dengtianjie=True,
+                auto_return_main_after_avatar_action=False,
+                identity_profiles=(
+                    IdentityProfile(key="main", kind="main", my_name="寒山子", switch_target="主魂", display_name="主魂"),
+                    IdentityProfile(key="avatar", kind="avatar", my_name="锐锋子", switch_target="锐锋子", display_name="锐锋子"),
+                ),
+                active_identity_key="main",
+            )
+            record = repo.create_account("alpha", config, enabled=True)
+            system_config = SystemConfig(app_db_path=str(path), log_dir=str(Path(tmpdir) / "logs"))
+            runner = AccountRunner(record, system_config)
+
+            with patch("xiuxian_bot.runtime.Scheduler", FakeScheduler), patch(
+                "xiuxian_bot.runtime.ReliableSender",
+                FakeSender,
+            ), patch("xiuxian_bot.runtime.TGAdapter", FakeAdapter), patch(
+                "xiuxian_bot.runtime.build_plugins",
+                side_effect=fake_build_plugins,
+            ):
+                await runner.start()
+                await asyncio.sleep(0.2)
+                await runner.stop()
+
+            self.assertEqual(sends, [".天阶状态", ".切换 主魂", ".登天阶"])
+            repo.close()
+
 
 @unittest.skipUnless(HAS_WEB_DEPS, "requires fastapi/httpx/telethon dependencies")
 class TestWebApp(unittest.IsolatedAsyncioTestCase):

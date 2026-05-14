@@ -119,6 +119,12 @@ class IdentitySwitchCoordinator:
     def _matches_identity(self, normalized_text: str, identity: IdentityProfile) -> bool:
         return identity_match_score(normalized_text, identity) > 0
 
+    def _is_related_feedback(self, ctx: MessageContext, command_msg_id: int | None = None) -> bool:
+        return bool(
+            ctx.is_effective_reply
+            or (command_msg_id is not None and ctx.reply_to_msg_id == command_msg_id)
+        )
+
     def observe(self, ctx: MessageContext) -> None:
         normalized_text = normalize_match_text(ctx.text)
         if not normalized_text:
@@ -127,10 +133,11 @@ class IdentitySwitchCoordinator:
         pending = self._pending_switch
         if pending is not None:
             if self._matches_keywords(normalized_text, self._config.switch_back_success_keywords):
-                self.mark_active("main")
-                if not pending.future.done():
-                    pending.future.set_result(pending.target_key == "main")
-                self._pending_switch = None
+                if self._is_related_feedback(ctx, pending.command_msg_id):
+                    self.mark_active("main")
+                    if not pending.future.done():
+                        pending.future.set_result(pending.target_key == "main")
+                    self._pending_switch = None
                 return
 
             target = self._config.identity_by_key(pending.target_key)
@@ -145,17 +152,17 @@ class IdentitySwitchCoordinator:
                 self._pending_switch = None
                 return
 
-            related = bool(
-                ctx.is_effective_reply
-                or (pending.command_msg_id is not None and ctx.reply_to_msg_id == pending.command_msg_id)
-            )
+            related = self._is_related_feedback(ctx, pending.command_msg_id)
             if related and self._matches_keywords(normalized_text, self._config.switch_failure_keywords):
                 if not pending.future.done():
                     pending.future.set_result(False)
                 self._pending_switch = None
             return
 
-        if self._matches_keywords(normalized_text, self._config.switch_back_success_keywords):
+        if (
+            self._matches_keywords(normalized_text, self._config.switch_back_success_keywords)
+            and self._is_related_feedback(ctx)
+        ):
             self.mark_active("main")
             return
 

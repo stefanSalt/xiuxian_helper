@@ -54,7 +54,13 @@ def _config() -> Config:
     )
 
 
-def _ctx(text: str, *, reply_to_msg_id: int | None = None) -> MessageContext:
+def _ctx(
+    text: str,
+    *,
+    reply_to_msg_id: int | None = None,
+    is_reply_to_me: bool | None = None,
+) -> MessageContext:
+    effective_reply_to_me = reply_to_msg_id is not None if is_reply_to_me is None else is_reply_to_me
     return MessageContext(
         chat_id=-100,
         message_id=2001,
@@ -63,7 +69,7 @@ def _ctx(text: str, *, reply_to_msg_id: int | None = None) -> MessageContext:
         text=text,
         ts=datetime.now(timezone.utc),
         is_reply=reply_to_msg_id is not None,
-        is_reply_to_me=reply_to_msg_id is not None,
+        is_reply_to_me=effective_reply_to_me,
     )
 
 
@@ -107,6 +113,52 @@ class TestIdentitySwitchMatching(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(coordinator.active_identity_key, "main")
 
+    def test_unrelated_switch_back_success_does_not_mark_main(self) -> None:
+        config = _config()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_store = SQLiteStateStore(
+                str(Path(tmpdir) / "state.sqlite3"),
+                logging.getLogger("test"),
+            )
+
+            async def _send(*_args, **_kwargs) -> int | None:  # type: ignore[no-untyped-def]
+                return 1001
+
+            coordinator = IdentitySwitchCoordinator(
+                config,
+                state_store,
+                logging.getLogger("test"),
+                _send,
+            )
+            coordinator.mark_active("avatar_a")
+
+            coordinator.observe(_ctx("你已收回神通，神念重归主魂肉身。"))
+
+            self.assertEqual(coordinator.active_identity_key, "avatar_a")
+
+    def test_related_switch_back_success_marks_main(self) -> None:
+        config = _config()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_store = SQLiteStateStore(
+                str(Path(tmpdir) / "state.sqlite3"),
+                logging.getLogger("test"),
+            )
+
+            async def _send(*_args, **_kwargs) -> int | None:  # type: ignore[no-untyped-def]
+                return 1001
+
+            coordinator = IdentitySwitchCoordinator(
+                config,
+                state_store,
+                logging.getLogger("test"),
+                _send,
+            )
+            coordinator.mark_active("avatar_a")
+
+            coordinator.observe(_ctx("你已收回神通，神念重归主魂肉身。", reply_to_msg_id=1001))
+
+            self.assertEqual(coordinator.active_identity_key, "main")
+
     async def test_pending_switch_prefers_target_when_names_are_same(self) -> None:
         config = _config()
         sent: list[str] = []
@@ -142,6 +194,49 @@ class TestIdentitySwitchMatching(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await asyncio.wait_for(task, timeout=1.0))
             self.assertEqual(sent, [".切换 222222"])
             self.assertEqual(coordinator.active_identity_key, "avatar_b")
+
+    async def test_pending_switch_back_ignores_unrelated_success(self) -> None:
+        config = _config()
+        sent: list[str] = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_store = SQLiteStateStore(
+                str(Path(tmpdir) / "state.sqlite3"),
+                logging.getLogger("test"),
+            )
+
+            async def _send(_plugin: str, text: str, _reply_to_topic: bool) -> int | None:
+                sent.append(text)
+                return 1001
+
+            coordinator = IdentitySwitchCoordinator(
+                config,
+                state_store,
+                logging.getLogger("test"),
+                _send,
+            )
+            coordinator.mark_active("avatar_a")
+
+            task = asyncio.create_task(
+                coordinator.ensure_identity(
+                    "main",
+                    timeout_seconds=1.0,
+                    retry_delay_seconds=1.0,
+                )
+            )
+            while not sent:
+                await asyncio.sleep(0)
+
+            coordinator.observe(_ctx("你已收回神通，神念重归主魂肉身。"))
+            await asyncio.sleep(0)
+
+            self.assertFalse(task.done())
+            self.assertEqual(coordinator.active_identity_key, "avatar_a")
+
+            coordinator.observe(_ctx("你已收回神通，神念重归主魂肉身。", reply_to_msg_id=1001))
+
+            self.assertTrue(await asyncio.wait_for(task, timeout=1.0))
+            self.assertEqual(sent, [".切换 主魂"])
+            self.assertEqual(coordinator.active_identity_key, "main")
 
 
 if __name__ == "__main__":

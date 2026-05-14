@@ -556,6 +556,14 @@ class AutoLingxiaogongPlugin:
     def _request_expired(self, requested_at: datetime | None, now: datetime) -> bool:
         return requested_at is not None and (now - requested_at).total_seconds() > self._REPLY_WINDOW_SECONDS
 
+    def expects_status_feedback(self, text: str, now: datetime | None = None) -> bool:
+        if not self.enabled or self._status_requested_at is None:
+            return False
+        current = now or datetime.now()
+        if self._request_expired(self._status_requested_at, current):
+            return False
+        return self._parse_status_snapshot(text) is not None
+
     async def _handle_status_snapshot(self, snapshot: _StatusSnapshot, now: datetime) -> None:
         if snapshot.wenxin_done is not None:
             self._today_wenxin_done = snapshot.wenxin_done
@@ -631,10 +639,12 @@ class AutoLingxiaogongPlugin:
         if snapshot is not None:
             if self._request_expired(self._status_requested_at, now):
                 self._clear_status_request()
-            if self._status_requested_at is not None and (
+            status_related = (
                 (self._status_request_msg_id is not None and ctx.reply_to_msg_id == self._status_request_msg_id)
                 or ctx.is_effective_reply
-            ):
+                or (ctx.is_from_system_identity and self.expects_status_feedback(text, now))
+            )
+            if self._status_requested_at is not None and status_related:
                 self._clear_status_request(save=False)
                 await self._handle_status_snapshot(snapshot, now)
                 return None

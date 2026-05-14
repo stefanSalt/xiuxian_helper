@@ -240,6 +240,7 @@ class _IdentityRuntime:
     dispatcher: Dispatcher
     state_store: SQLiteStateStore
     xinggong: object | None
+    lingxiaogong: object | None
     yuanying: object | None
     random_text: object | None
 
@@ -380,6 +381,7 @@ class AccountRunner:
                 dispatcher=Dispatcher(plugins, self._logger),
                 state_store=identity_state_store,
                 xinggong=next((p for p in plugins if getattr(p, "name", "") == "xinggong"), None),
+                lingxiaogong=next((p for p in plugins if getattr(p, "name", "") == "lingxiaogong"), None),
                 yuanying=next((p for p in plugins if getattr(p, "name", "") == "yuanying"), None),
                 random_text=next((p for p in plugins if getattr(p, "name", "") == "random_text"), None),
             )
@@ -629,6 +631,20 @@ class AccountRunner:
                     return runtime
             return None
 
+        def _lingxiaogong_status_runtime(text: str) -> _IdentityRuntime | None:
+            candidates: list[_IdentityRuntime] = []
+            for identity in base_config.identities:
+                runtime = runtimes.get(identity.key)
+                if runtime is None:
+                    continue
+                plugin = runtime.lingxiaogong
+                if plugin is None or not getattr(plugin, "enabled", False):
+                    continue
+                expects = getattr(plugin, "expects_status_feedback", None)
+                if callable(expects) and expects(text):
+                    candidates.append(runtime)
+            return candidates[0] if len(candidates) == 1 else None
+
         async def _on_event(event, event_type: str) -> None:
             ctx = await adapter.build_context(event)
             identity_switch.observe(ctx)
@@ -636,6 +652,7 @@ class AccountRunner:
             if not _in_scope(base_config, ctx.text, ctx.reply_to_msg_id, ctx.is_reply_to_me):
                 return
             runtime = _runtime_for_context(ctx)
+            runtime = _lingxiaogong_status_runtime(ctx.text) or runtime
             if _is_guanxing_route_candidate(ctx.text):
                 runtime = _guanxing_listener_runtime() or runtime
             if adapter.me_id is not None and ctx.sender_id != adapter.me_id:
