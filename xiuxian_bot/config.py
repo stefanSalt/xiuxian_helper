@@ -336,6 +336,8 @@ class Config:
     zongmen_catch_up: bool
     zongmen_action_spacing_seconds: int
 
+    enable_zongmen_chuangong: bool = False
+
     # Biguan mode
     biguan_mode: str = "normal"
     biguan_deep_settle_command: str = ".状态"
@@ -512,10 +514,16 @@ class Config:
     @staticmethod
     def from_mapping(data: Mapping[str, Any]) -> "Config":
         enable_zongmen = _parse_bool(data.get("enable_zongmen", False), "enable_zongmen")
+        enable_zongmen_chuangong = _parse_bool(
+            data.get("enable_zongmen_chuangong", False),
+            "enable_zongmen_chuangong",
+        )
         zongmen_dianmao_time = _parse_optional_str(data.get("zongmen_dianmao_time"))
         zongmen_chuangong_times = _parse_optional_str(data.get("zongmen_chuangong_times"))
-        if enable_zongmen and (zongmen_dianmao_time is None or zongmen_chuangong_times is None):
-            raise ValueError("启用宗门功能时必须填写点卯时间和传功时间")
+        if enable_zongmen and zongmen_dianmao_time is None:
+            raise ValueError("启用宗门功能时必须填写点卯时间")
+        if enable_zongmen and enable_zongmen_chuangong and zongmen_chuangong_times is None:
+            raise ValueError("启用宗门传功时必须填写传功时间")
         biguan_mode = str(data.get("biguan_mode", "normal")).strip().lower() or "normal"
         if biguan_mode not in {"normal", "deep"}:
             raise ValueError("biguan_mode 必须是 normal 或 deep")
@@ -812,6 +820,7 @@ class Config:
                 data.get("zongmen_chuangong_xinde_text", "今日修行心得：稳中求进。")
             ).strip()
             or "今日修行心得：稳中求进。",
+            enable_zongmen_chuangong=enable_zongmen_chuangong,
             zongmen_catch_up=_parse_bool(data.get("zongmen_catch_up", True), "zongmen_catch_up"),
             zongmen_action_spacing_seconds=_parse_int(
                 data.get("zongmen_action_spacing_seconds", 20),
@@ -1118,6 +1127,10 @@ class Config:
             "zongmen_chuangong_xinde_text": _get_env_str(
                 "ZONGMEN_CHUANGONG_XINDE_TEXT",
                 default="今日修行心得：稳中求进。",
+            ),
+            "enable_zongmen_chuangong": _get_env_bool(
+                "ENABLE_ZONGMEN_CHUANGONG",
+                default=False,
             ),
             "zongmen_catch_up": _get_env_bool("ZONGMEN_CATCH_UP", default=True),
             "zongmen_action_spacing_seconds": _get_env_int(

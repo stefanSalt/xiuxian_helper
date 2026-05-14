@@ -174,6 +174,59 @@ class TestConfig(unittest.TestCase):
                 }
             )
 
+    def test_from_mapping_defaults_zongmen_chuangong_disabled(self) -> None:
+        config = Config.from_mapping(
+            {
+                "tg_api_id": "1",
+                "tg_api_hash": "hash",
+                "tg_session_name": "session",
+                "game_chat_id": "-100",
+                "topic_id": "123",
+                "my_name": "Me",
+                "enable_zongmen": "true",
+                "zongmen_dianmao_time": "09:00",
+            }
+        )
+
+        self.assertTrue(config.enable_zongmen)
+        self.assertFalse(config.enable_zongmen_chuangong)
+        self.assertIsNone(config.zongmen_chuangong_times)
+
+    def test_from_mapping_accepts_zongmen_chuangong_enabled(self) -> None:
+        config = Config.from_mapping(
+            {
+                "tg_api_id": "1",
+                "tg_api_hash": "hash",
+                "tg_session_name": "session",
+                "game_chat_id": "-100",
+                "topic_id": "123",
+                "my_name": "Me",
+                "enable_zongmen": "true",
+                "enable_zongmen_chuangong": "true",
+                "zongmen_dianmao_time": "09:00",
+                "zongmen_chuangong_times": "10:00,12:00,18:00",
+            }
+        )
+
+        self.assertTrue(config.enable_zongmen_chuangong)
+        self.assertEqual(config.zongmen_chuangong_times, "10:00,12:00,18:00")
+
+    def test_from_mapping_requires_chuangong_times_when_chuangong_enabled(self) -> None:
+        with self.assertRaisesRegex(ValueError, "传功时间"):
+            Config.from_mapping(
+                {
+                    "tg_api_id": "1",
+                    "tg_api_hash": "hash",
+                    "tg_session_name": "session",
+                    "game_chat_id": "-100",
+                    "topic_id": "123",
+                    "my_name": "Me",
+                    "enable_zongmen": "true",
+                    "enable_zongmen_chuangong": "true",
+                    "zongmen_dianmao_time": "09:00",
+                }
+            )
+
     def test_from_mapping_accepts_random_text_fields_and_identity_override(self) -> None:
         config = Config.from_mapping(
             {

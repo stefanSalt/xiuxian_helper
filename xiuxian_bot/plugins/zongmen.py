@@ -31,6 +31,7 @@ class AutoZongmenPlugin:
         self._config = config
         self._logger = logger
         self.enabled = config.enable_zongmen
+        self._chuangong_enabled = bool(config.enable_zongmen_chuangong)
 
         self._cmd_dianmao = config.zongmen_cmd_dianmao.strip()
         self._cmd_chuangong = config.zongmen_cmd_chuangong.strip()
@@ -40,7 +41,9 @@ class AutoZongmenPlugin:
 
         self._dianmao_hm = self._parse_hhmm(config.zongmen_dianmao_time) if self.enabled else (0, 0)
         self._chuangong_hms = (
-            self._parse_hhmm_list(config.zongmen_chuangong_times) if self.enabled else [(0, 0), (0, 0), (0, 0)]
+            self._parse_hhmm_list(config.zongmen_chuangong_times)
+            if self.enabled and self._chuangong_enabled
+            else [(0, 0), (0, 0), (0, 0)]
         )
         self._state_store: SQLiteStateStore | None = None
 
@@ -54,7 +57,7 @@ class AutoZongmenPlugin:
             self._logger.info(
                 "zongmen_plugin_enabled dianmao_time=%s chuangong_times=%s catch_up=%s",
                 config.zongmen_dianmao_time,
-                config.zongmen_chuangong_times,
+                config.zongmen_chuangong_times if self._chuangong_enabled else "-",
                 self._catch_up,
             )
 
@@ -209,12 +212,13 @@ class AutoZongmenPlugin:
             offset += float(self._spacing)
         await self._schedule_dianmao(scheduler, send, dianmao_date, dianmao_delay)
 
-        for idx, (hh, mm) in enumerate(self._chuangong_hms, start=1):
-            delay, occ_date = self._seconds_until(now, hh, mm)
-            if delay == 0.0 and self._catch_up:
-                delay = offset
-                offset += float(self._spacing)
-            await self._schedule_chuangong(scheduler, send, idx, occ_date, delay)
+        if self._chuangong_enabled:
+            for idx, (hh, mm) in enumerate(self._chuangong_hms, start=1):
+                delay, occ_date = self._seconds_until(now, hh, mm)
+                if delay == 0.0 and self._catch_up:
+                    delay = offset
+                    offset += float(self._spacing)
+                await self._schedule_chuangong(scheduler, send, idx, occ_date, delay)
 
     async def _schedule_dianmao(
         self,
@@ -288,6 +292,9 @@ class AutoZongmenPlugin:
     async def _maybe_send_chuangong(self, send) -> str:
         now = datetime.now()
         self._reset_if_new_day(now)
+        if not self._chuangong_enabled:
+            self._logger.info("zongmen_skip action=chuangong reason=toggle_disabled")
+            return "skip"
         if self._chuangong_disabled:
             self._logger.warning("zongmen_skip action=chuangong reason=disabled")
             return "skip"

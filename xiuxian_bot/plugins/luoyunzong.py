@@ -27,10 +27,12 @@ class LuoyunzongPlugin:
     _CMD_GUARD = ".协同守山"
     _CMD_HARVEST = ".采摘灵果"
     _STATUS_LOOP_KEY = "luoyunzong.status.loop"
+    _LINGGEN_LOOP_KEY = "luoyunzong.linggen.loop"
     _STATE_KEY = "luoyunzong"
     _GUARD_SUPPRESS_SECONDS = 300
     _HARVEST_STATUS_CHECK_SECONDS = 4 * 3600
     _PENDING_ACTION_TTL_SECONDS = 5 * 60
+    _STATUS_OWNER_MIN_TTL_SECONDS = 10 * 60
     _VALID_WATERING_STRATEGIES = {"match_linggen", "always", "match_need"}
 
     def __init__(
@@ -43,6 +45,10 @@ class LuoyunzongPlugin:
         self._logger = logger
         self.enabled = bool(getattr(config, "enable_luoyunzong", False))
         self._identity_key = str(getattr(config, "active_identity_key", "main") or "main")
+        account_id = str(getattr(config, "account_id", "") or "")
+        self._status_owner_key = (
+            f"{account_id}:{self._identity_key}" if account_id else self._identity_key
+        )
         self._status_interval_seconds = max(
             60,
             int(getattr(config, "luoyunzong_status_interval_seconds", 1800)),
@@ -69,6 +75,7 @@ class LuoyunzongPlugin:
         self._scheduler: Scheduler | None = None
         self._send: SendFn | None = None
         self._state_store: SQLiteStateStore | None = None
+        self._global_state_store: SQLiteStateStore | None = None
         self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
         self._linggen = ""
         self._linggen_refreshed_at: datetime | None = None
@@ -77,25 +84,35 @@ class LuoyunzongPlugin:
         self._guard_suppress_until: datetime | None = None
         self._pending_action: str | None = None
         self._pending_action_started_at: datetime | None = None
+        self._status_owner: str | None = None
+        self._status_owner_until: datetime | None = None
+        self._last_status_seen_at: datetime | None = None
+        self._last_status_needs: list[str] = []
+        self._last_status_mature = False
+        self._last_status_under_attack = False
 
     def set_state_store(self, store: SQLiteStateStore) -> None:
         self._state_store = store
 
+    def set_global_state_store(self, store: SQLiteStateStore) -> None:
+        self._global_state_store = store
+
     def restore_state(self) -> None:
-        if self._state_store is None:
-            return
-        state = self._state_store.load_state(self._STATE_KEY)
-        self._linggen = str(state.get("linggen", "") or "")
-        self._linggen_refreshed_at = deserialize_datetime(state.get("linggen_refreshed_at"))
-        self._watering_next_at = deserialize_datetime(state.get("watering_next_at"))
-        self._harvest_suppress_until = deserialize_datetime(state.get("harvest_suppress_until"))
-        self._guard_suppress_until = deserialize_datetime(state.get("guard_suppress_until"))
+        if self._state_store is not None:
+            state = self._state_store.load_state(self._STATE_KEY)
+            self._linggen = str(state.get("linggen", "") or "")
+            self._linggen_refreshed_at = deserialize_datetime(state.get("linggen_refreshed_at"))
+            self._watering_next_at = deserialize_datetime(state.get("watering_next_at"))
+            self._harvest_suppress_until = deserialize_datetime(state.get("harvest_suppress_until"))
+            self._guard_suppress_until = deserialize_datetime(state.get("guard_suppress_until"))
+        self._load_global_state()
 
     async def bootstrap(self, scheduler: Scheduler, send: SendFn) -> None:
         if not self.enabled:
             return
         self._scheduler = scheduler
         self._send = send
+        await self._schedule_linggen(self._linggen_delay_seconds())
         await self._schedule_status(self._status_delay_seconds())
 
     async def on_message(self, ctx: MessageContext) -> list[SendAction] | None:
@@ -110,6 +127,7 @@ class LuoyunzongPlugin:
             self._linggen = linggen
             self._linggen_refreshed_at = self._now()
             self._save_state()
+            await self._schedule_linggen(float(self._linggen_refresh_seconds))
             self._logger.info(
                 "luoyunzong_linggen_updated identity=%s linggen=%s",
                 self._identity_key,
@@ -118,7 +136,7 @@ class LuoyunzongPlugin:
             return None
 
         if self._is_tree_status(text):
-            return await self._handle_status(text, ctx.message_id)
+            return await self._handle_status(text, ctx.message_id, personal=True)
 
         if self._looks_like_action_feedback(text):
             await self._handle_action_feedback(text)
@@ -126,9 +144,58 @@ class LuoyunzongPlugin:
 
         return None
 
-    async def _handle_status(self, text: str, message_id: int) -> list[SendAction] | None:
+    async def on_global_status(self, ctx: MessageContext) -> list[SendAction] | None:
+        if not self.enabled:
+            return None
+        text = (ctx.text or "").strip()
+        if not text:
+            return None
+        if self._is_public_guard_started(text):
+            return await self._handle_public_guard_started(ctx.message_id)
+        if self._is_public_guard_finished(text):
+            await self._handle_public_guard_finished()
+            return None
+        if not self._is_tree_status(text):
+            return None
+        return await self._handle_status(text, ctx.message_id, personal=False)
+
+    async def _handle_public_guard_started(self, message_id: int) -> list[SendAction] | None:
+        status = self._public_status(under_attack=True)
+        self._remember_global_status(status)
+        if self._pending_action is not None and not self._expire_pending_action():
+            await self._schedule_status(float(self._status_interval_seconds))
+            self._log_status_decision(status, f"pending_{self._pending_action}", "skip")
+            return None
+        if self._is_guard_suppressed():
+            await self._schedule_status(float(self._GUARD_SUPPRESS_SECONDS))
+            self._log_status_decision(status, "guard_suppressed", "skip")
+            return None
+        self._guard_suppress_until = self._now() + timedelta(seconds=self._GUARD_SUPPRESS_SECONDS)
+        self._set_pending_action("guard")
+        self._save_state()
+        await self._schedule_status(float(self._GUARD_SUPPRESS_SECONDS))
+        self._log_status_decision(status, "public_under_attack", self._CMD_GUARD)
+        return [self._action(self._CMD_GUARD, message_id)]
+
+    async def _handle_public_guard_finished(self) -> None:
+        status = self._public_status(under_attack=False)
+        self._remember_global_status(status)
+        if self._pending_action == "guard":
+            self._clear_pending_action()
+            self._save_state()
+        await self._schedule_status(0.0)
+        self._log_status_decision(status, "public_guard_finished", "skip")
+
+    async def _handle_status(
+        self,
+        text: str,
+        message_id: int,
+        *,
+        personal: bool,
+    ) -> list[SendAction] | None:
         status = self._parse_status(text)
-        if status["harvested"]:
+        self._remember_global_status(status)
+        if personal and status["harvested"]:
             remaining_seconds = status["remaining_seconds"]
             self._mark_harvest_suppressed(
                 remaining_seconds=remaining_seconds
@@ -141,7 +208,8 @@ class LuoyunzongPlugin:
             self._log_status_decision(status, "already_harvested", "suppress")
             return None
 
-        self._clear_harvest_suppression()
+        if personal or not status["mature"]:
+            self._clear_harvest_suppression()
 
         if self._pending_action is not None:
             if not self._expire_pending_action():
@@ -198,10 +266,17 @@ class LuoyunzongPlugin:
             await self._schedule_status(float(self._status_interval_seconds))
         elif kind == "watering_unneeded":
             await self._schedule_status(0.0)
+        elif kind == "guard_cooldown":
+            remaining = self._parse_duration_seconds(text)
+            if remaining is None:
+                return
+            self._guard_suppress_until = self._now() + timedelta(seconds=remaining)
+            await self._schedule_status(float(remaining))
         elif kind == "guard":
             self._guard_suppress_until = self._now() + timedelta(
                 seconds=self._GUARD_SUPPRESS_SECONDS
             )
+            await self._schedule_status(float(self._GUARD_SUPPRESS_SECONDS))
         elif kind == "harvest":
             self._mark_harvest_suppressed()
             await self._schedule_status(self._next_status_delay_seconds())
@@ -210,24 +285,33 @@ class LuoyunzongPlugin:
         self._clear_pending_action()
         self._save_state()
         self._logger.info(
-            "luoyunzong_feedback identity=%s kind=%s remaining_seconds=%s watering_next_at=%s harvest_suppress_until=%s",
+            "luoyunzong_feedback identity=%s kind=%s remaining_seconds=%s watering_next_at=%s harvest_suppress_until=%s guard_suppress_until=%s",
             self._identity_key,
             kind,
             remaining if remaining is not None else "-",
             self._format_datetime(self._watering_next_at),
             self._format_datetime(self._harvest_suppress_until),
+            self._format_datetime(self._guard_suppress_until),
         )
 
     async def _status_loop(self) -> None:
         if not self.enabled or self._send is None:
             return
-        if self._linggen_needs_refresh():
-            await self._send(self.name, self._CMD_LINGGEN, True)
+        if not self._claim_status_owner(self._next_status_delay_seconds()):
+            return
         await self._send(self.name, self._CMD_STATUS, True)
         await self._schedule_status(self._next_status_delay_seconds())
 
     async def _schedule_status(self, delay_seconds: float) -> None:
         if self._scheduler is None:
+            return
+        if not self._claim_status_owner(delay_seconds):
+            self._logger.debug(
+                "luoyunzong_status_schedule_skipped identity=%s owner=%s owner_until=%s",
+                self._identity_key,
+                self._status_owner or "-",
+                self._format_datetime(self._status_owner_until),
+            )
             return
 
         async def _runner() -> None:
@@ -235,6 +319,25 @@ class LuoyunzongPlugin:
 
         await self._scheduler.schedule(
             key=self._STATUS_LOOP_KEY,
+            delay_seconds=max(0.0, float(delay_seconds)),
+            action=_runner,
+        )
+
+    async def _linggen_loop(self) -> None:
+        if not self.enabled or self._send is None:
+            return
+        await self._send(self.name, self._CMD_LINGGEN, True)
+        await self._schedule_linggen(float(self._linggen_refresh_seconds))
+
+    async def _schedule_linggen(self, delay_seconds: float) -> None:
+        if self._scheduler is None:
+            return
+
+        async def _runner() -> None:
+            await self._linggen_loop()
+
+        await self._scheduler.schedule(
+            key=self._LINGGEN_LOOP_KEY,
             delay_seconds=max(0.0, float(delay_seconds)),
             action=_runner,
         )
@@ -252,6 +355,12 @@ class LuoyunzongPlugin:
         if now.tzinfo is None:
             return now.replace(tzinfo=timezone.utc)
         return now
+
+    def _linggen_delay_seconds(self) -> float:
+        if not self._linggen or self._linggen_refreshed_at is None:
+            return 0.0
+        age_seconds = (self._now() - self._linggen_refreshed_at).total_seconds()
+        return max(0.0, float(self._linggen_refresh_seconds) - age_seconds)
 
     def _status_delay_seconds(self) -> float:
         remaining = self._harvest_remaining_seconds()
@@ -277,6 +386,31 @@ class LuoyunzongPlugin:
         if self._guard_suppress_until is None:
             return False
         return (self._guard_suppress_until - self._now()).total_seconds() > 0
+
+    def _status_owner_ttl_seconds(self, delay_seconds: float) -> float:
+        return max(
+            float(self._STATUS_OWNER_MIN_TTL_SECONDS),
+            float(delay_seconds) + float(self._status_interval_seconds),
+        )
+
+    def _claim_status_owner(self, delay_seconds: float) -> bool:
+        if self._global_state_store is None:
+            return True
+        self._load_global_state()
+        now = self._now()
+        if (
+            self._status_owner
+            and self._status_owner != self._status_owner_key
+            and self._status_owner_until is not None
+            and self._status_owner_until > now
+        ):
+            return False
+        self._status_owner = self._status_owner_key
+        self._status_owner_until = now + timedelta(
+            seconds=self._status_owner_ttl_seconds(delay_seconds)
+        )
+        self._save_global_state()
+        return True
 
     def _set_pending_action(self, action: str) -> None:
         self._pending_action = action
@@ -332,6 +466,16 @@ class LuoyunzongPlugin:
         self._harvest_suppress_until = None
         self._save_state()
 
+    def _remember_global_status(self, status: dict[str, object]) -> None:
+        if self._global_state_store is not None:
+            self._load_global_state()
+        needs = status["needs"] if isinstance(status["needs"], list) else []
+        self._last_status_seen_at = self._now()
+        self._last_status_needs = [str(item) for item in needs]
+        self._last_status_mature = bool(status["mature"])
+        self._last_status_under_attack = bool(status["under_attack"])
+        self._save_global_state()
+
     def _save_state(self) -> None:
         if self._state_store is None:
             return
@@ -343,6 +487,36 @@ class LuoyunzongPlugin:
                 "watering_next_at": serialize_datetime(self._watering_next_at),
                 "harvest_suppress_until": serialize_datetime(self._harvest_suppress_until),
                 "guard_suppress_until": serialize_datetime(self._guard_suppress_until),
+            },
+        )
+
+    def _load_global_state(self) -> None:
+        if self._global_state_store is None:
+            return
+        state = self._global_state_store.load_state(self._STATE_KEY)
+        self._status_owner = str(state.get("status_owner", "") or "") or None
+        self._status_owner_until = deserialize_datetime(state.get("status_owner_until"))
+        self._last_status_seen_at = deserialize_datetime(state.get("last_status_seen_at"))
+        raw_needs = state.get("last_status_needs", [])
+        if isinstance(raw_needs, list):
+            self._last_status_needs = [str(item) for item in raw_needs if str(item)]
+        else:
+            self._last_status_needs = []
+        self._last_status_mature = bool(state.get("last_status_mature", False))
+        self._last_status_under_attack = bool(state.get("last_status_under_attack", False))
+
+    def _save_global_state(self) -> None:
+        if self._global_state_store is None:
+            return
+        self._global_state_store.save_state(
+            self._STATE_KEY,
+            {
+                "status_owner": self._status_owner,
+                "status_owner_until": serialize_datetime(self._status_owner_until),
+                "last_status_seen_at": serialize_datetime(self._last_status_seen_at),
+                "last_status_needs": self._last_status_needs,
+                "last_status_mature": self._last_status_mature,
+                "last_status_under_attack": self._last_status_under_attack,
             },
         )
 
@@ -405,8 +579,33 @@ class LuoyunzongPlugin:
             "remaining_seconds": self._parse_remaining_seconds(text),
         }
 
+    def _public_status(self, *, under_attack: bool) -> dict[str, object]:
+        return {
+            "needs": [],
+            "progress": None,
+            "stage": None,
+            "mature": False,
+            "harvested": False,
+            "under_attack": under_attack,
+            "remaining_seconds": None,
+        }
+
     def _is_tree_status(self, text: str) -> bool:
         return "落云宗" in text and "灵眼之树" in text
+
+    def _is_public_guard_started(self, text: str) -> bool:
+        return (
+            "古剑门来袭" in text
+            and "护山大阵" in text
+            and ".协同守山" in text
+        )
+
+    def _is_public_guard_finished(self, text: str) -> bool:
+        return (
+            "守护成功" in text
+            and "古剑门" in text
+            and "成功击退" in text
+        )
 
     def _parse_linggen(self, text: str) -> str:
         match = re.search(r"灵根[:：]\s*([^\r\n]+)", text)
@@ -453,6 +652,8 @@ class LuoyunzongPlugin:
             return "watering_cooldown"
         if self._is_watering_success_feedback(text):
             return "watering_success"
+        if self._is_guard_cooldown_feedback(text):
+            return "guard_cooldown"
         if "协同守山" in text or "守山" in text:
             return "guard"
         if "采摘灵果" in text or "采摘" in text or "奖励已入袋" in text:
@@ -468,6 +669,9 @@ class LuoyunzongPlugin:
     def _is_watering_unneeded_feedback(self, text: str) -> bool:
         return "灵眼之树已然成熟或正遭劫难" in text and "无需灌溉" in text
 
+    def _is_guard_cooldown_feedback(self, text: str) -> bool:
+        return "守山" in text and "请在" in text and "后再来守山" in text
+
     def _looks_like_action_feedback(self, text: str) -> bool:
         return any(
             token in text
@@ -477,6 +681,7 @@ class LuoyunzongPlugin:
                 "后再来灌溉",
                 "无需灌溉",
                 "协同守山",
+                "后再来守山",
                 "采摘灵果",
                 "奖励已入袋",
             )

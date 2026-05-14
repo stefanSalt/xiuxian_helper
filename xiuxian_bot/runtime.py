@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .config import Config, SystemConfig
 from .core.account_repository import AccountRecord, AccountRepository
+from .core.contracts import MessageContext, SendAction
 from .core.dispatcher import Dispatcher
 from .core.identity_switch import IdentitySwitchCoordinator, unique_best_identity_match
 from .core.message_archive_repository import MessageArchiveInput, MessageArchiveRepository
@@ -95,6 +96,17 @@ def _in_scope(config: Config, text: str, reply_to_msg_id: int | None, is_reply_t
 def _is_guanxing_route_candidate(text: str) -> bool:
     normalized = normalize_match_text(text)
     return any(anchor and anchor in normalized for anchor in _GUANXING_EVENT_ANCHORS)
+
+
+def _is_luoyunzong_status_route_candidate(text: str) -> bool:
+    return "落云宗" in text and "灵眼之树" in text
+
+
+def _is_luoyunzong_public_guard_route_candidate(text: str) -> bool:
+    return (
+        ("古剑门来袭" in text and "护山大阵" in text and ".协同守山" in text)
+        or ("守护成功" in text and "古剑门" in text and "成功击退" in text)
+    )
 
 
 def _extract_topic_id_from_event(event) -> int | None:
@@ -241,6 +253,7 @@ class _IdentityRuntime:
     state_store: SQLiteStateStore
     xinggong: object | None
     lingxiaogong: object | None
+    luoyunzong: object | None
     yuanying: object | None
     random_text: object | None
 
@@ -363,6 +376,7 @@ class AccountRunner:
         )
 
         runtimes: dict[str, _IdentityRuntime] = {}
+        luoyunzong_global_state_store = state_store.for_account("__global__:luoyunzong")
         for identity in base_config.identities:
             identity_config = base_config.apply_identity(identity.key)
             identity_state_store = state_store.for_account(f"{self.record.id}:{identity.key}")
@@ -371,6 +385,9 @@ class AccountRunner:
                 bind = getattr(plugin, "set_state_store", None)
                 if callable(bind):
                     bind(identity_state_store)
+                bind_global = getattr(plugin, "set_global_state_store", None)
+                if callable(bind_global):
+                    bind_global(luoyunzong_global_state_store)
                 restore = getattr(plugin, "restore_state", None)
                 if callable(restore):
                     restore()
@@ -382,6 +399,7 @@ class AccountRunner:
                 state_store=identity_state_store,
                 xinggong=next((p for p in plugins if getattr(p, "name", "") == "xinggong"), None),
                 lingxiaogong=next((p for p in plugins if getattr(p, "name", "") == "lingxiaogong"), None),
+                luoyunzong=next((p for p in plugins if getattr(p, "name", "") == "luoyunzong"), None),
                 yuanying=next((p for p in plugins if getattr(p, "name", "") == "yuanying"), None),
                 random_text=next((p for p in plugins if getattr(p, "name", "") == "random_text"), None),
             )
@@ -645,16 +663,45 @@ class AccountRunner:
                     candidates.append(runtime)
             return candidates[0] if len(candidates) == 1 else None
 
+        async def _dispatch_luoyunzong_status(
+            ctx: MessageContext,
+            *,
+            personal_runtime: _IdentityRuntime | None,
+        ) -> list[tuple[SendAction, str]]:
+            action_items: list[tuple[SendAction, str]] = []
+            for identity in base_config.identities:
+                candidate = runtimes.get(identity.key)
+                if candidate is None:
+                    continue
+                plugin = candidate.luoyunzong
+                if plugin is None or not getattr(plugin, "enabled", False):
+                    continue
+                if personal_runtime is not None and candidate.identity_key == personal_runtime.identity_key:
+                    actions = await candidate.dispatcher.dispatch(ctx)
+                else:
+                    on_global_status = getattr(plugin, "on_global_status", None)
+                    if not callable(on_global_status):
+                        continue
+                    actions = await on_global_status(ctx)
+                if actions:
+                    action_items.extend((action, candidate.identity_key) for action in actions)
+            return action_items
+
         async def _on_event(event, event_type: str) -> None:
             ctx = await adapter.build_context(event)
             identity_switch.observe(ctx)
             await _archive_message_event(event, ctx, event_type)
-            if not _in_scope(base_config, ctx.text, ctx.reply_to_msg_id, ctx.is_reply_to_me):
+            in_scope = _in_scope(base_config, ctx.text, ctx.reply_to_msg_id, ctx.is_reply_to_me)
+            is_luoyunzong_status = _is_luoyunzong_status_route_candidate(ctx.text)
+            is_luoyunzong_public_guard = _is_luoyunzong_public_guard_route_candidate(ctx.text)
+            is_luoyunzong_event = is_luoyunzong_status or is_luoyunzong_public_guard
+            if not in_scope and not is_luoyunzong_event:
                 return
             runtime = _runtime_for_context(ctx)
-            runtime = _lingxiaogong_status_runtime(ctx.text) or runtime
-            if _is_guanxing_route_candidate(ctx.text):
-                runtime = _guanxing_listener_runtime() or runtime
+            if in_scope:
+                runtime = _lingxiaogong_status_runtime(ctx.text) or runtime
+                if _is_guanxing_route_candidate(ctx.text):
+                    runtime = _guanxing_listener_runtime() or runtime
             if adapter.me_id is not None and ctx.sender_id != adapter.me_id:
                 interesting = (
                     ctx.is_reply_to_me
@@ -666,17 +713,25 @@ class AccountRunner:
                     or ("天机阁快报" in ctx.text)
                     or ("天机异动" in ctx.text)
                     or ("星移失败" in ctx.text)
+                    or is_luoyunzong_event
                 )
                 if interesting:
                     self._logger.info("<< %s", _short_text(ctx.text))
 
-            actions = await runtime.dispatcher.dispatch(ctx)
+            if is_luoyunzong_event:
+                action_items = await _dispatch_luoyunzong_status(
+                    ctx,
+                    personal_runtime=runtime if in_scope and is_luoyunzong_status else None,
+                )
+            else:
+                actions = await runtime.dispatcher.dispatch(ctx)
+                action_items = [(action, runtime.identity_key) for action in actions]
             pause_message = _current_pause_message() if runtime.identity_key == identity_switch.active_identity_key else None
             if pause_message is not None and runtime.identity_key == identity_switch.active_identity_key:
                 await _enter_pause_mode(pause_message)
                 return
-            for action in actions:
-                await _execute_action(action, identity_key=runtime.identity_key)
+            for action, action_identity_key in action_items:
+                await _execute_action(action, identity_key=action_identity_key)
 
         async def _on_new_message(event) -> None:
             await _on_event(event, "new")

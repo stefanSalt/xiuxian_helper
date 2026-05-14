@@ -9,7 +9,11 @@ from xiuxian_bot.core.scheduler import Scheduler
 from xiuxian_bot.plugins.zongmen import AutoZongmenPlugin
 
 
-def _dummy_config(*, enable_zongmen: bool = True) -> Config:
+def _dummy_config(
+    *,
+    enable_zongmen: bool = True,
+    enable_zongmen_chuangong: bool = True,
+) -> Config:
     return Config(
         tg_api_id=1,
         tg_api_hash="hash",
@@ -51,6 +55,7 @@ def _dummy_config(*, enable_zongmen: bool = True) -> Config:
         zongmen_dianmao_time="00:00",
         zongmen_chuangong_times="00:00,00:00,00:00",
         zongmen_chuangong_xinde_text="宗门传功",
+        enable_zongmen_chuangong=enable_zongmen_chuangong,
         zongmen_catch_up=True,
         zongmen_action_spacing_seconds=0,
     )
@@ -111,6 +116,23 @@ class TestZongmenParser(unittest.IsolatedAsyncioTestCase):
 
 
 class TestZongmenBootstrap(unittest.IsolatedAsyncioTestCase):
+    async def test_bootstrap_default_chuangong_disabled_only_schedules_dianmao(self) -> None:
+        logger = logging.getLogger("test")
+        scheduler = Scheduler(logger)
+        plugin = AutoZongmenPlugin(_dummy_config(enable_zongmen_chuangong=False), logger)
+
+        calls: list[tuple[str, str, bool, int | None]] = []
+
+        async def fake_send(plugin_name: str, text: str, reply_to_topic: bool, *, reply_to_msg_id=None):
+            calls.append((plugin_name, text, reply_to_topic, reply_to_msg_id))
+            return 1001
+
+        await plugin.bootstrap(scheduler, fake_send)
+        await asyncio.sleep(0.2)
+        await scheduler.cancel_all()
+
+        self.assertEqual(calls, [("zongmen", "宗门点卯", True, None)])
+
     async def test_bootstrap_catchup_sends_dianmao_and_chuangong(self) -> None:
         logger = logging.getLogger("test")
         scheduler = Scheduler(logger)

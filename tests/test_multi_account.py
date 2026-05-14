@@ -169,6 +169,19 @@ class TestMultiAccountStorage(unittest.TestCase):
             self.assertEqual(beta.load_state("xinggong"), {"count": 2})
             root.close()
 
+    def test_luoyunzong_public_guard_messages_are_route_candidates(self) -> None:
+        from xiuxian_bot.runtime import _is_luoyunzong_public_guard_route_candidate
+
+        started = (
+            "🚨 【警报！古剑门来袭！】 🚨\n"
+            "护山大阵已开启！所有落云宗弟子请立刻使用 .协同守山 抵御外敌！"
+        )
+        finished = "【守护成功！】古剑门的攻势已被成功击退！"
+
+        self.assertTrue(_is_luoyunzong_public_guard_route_candidate(started))
+        self.assertTrue(_is_luoyunzong_public_guard_route_candidate(finished))
+        self.assertFalse(_is_luoyunzong_public_guard_route_candidate("请速用 .查看货品 与其交易！"))
+
     def test_account_repository_crud_and_delete_states(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "app.sqlite3"
