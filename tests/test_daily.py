@@ -76,6 +76,28 @@ class TestDailyPlugin(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(scheduled[2][0], "daily.bushi.loop")
         self.assertEqual(scheduled[2][1], 120.0)
 
+    async def test_bushi_keeps_avatar_until_last_run(self) -> None:
+        plugin = DailyPlugin(
+            _dummy_config(daily_bushi_times_per_day="2"),
+            logging.getLogger("test"),
+        )
+        scheduled: list[tuple[str, float, object]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                scheduled.append((key, delay_seconds, action))
+
+        async def _send(_plugin_name: str, _text: str, _reply_to_topic: bool) -> int | None:
+            return 1
+
+        await plugin.bootstrap(_FakeScheduler(), _send)
+        first = next(action for key, _, action in scheduled if key == "daily.bushi.loop")
+        await first()
+        self.assertFalse(plugin.should_auto_return_after_send(".卜筮问天"))
+        second = scheduled[-1][2]
+        await second()
+        self.assertTrue(plugin.should_auto_return_after_send(".卜筮问天"))
+
     async def test_rare_event_replies_exchange_to_message(self) -> None:
         plugin = DailyPlugin(_dummy_config(), logging.getLogger("test"))
         ctx = MessageContext(

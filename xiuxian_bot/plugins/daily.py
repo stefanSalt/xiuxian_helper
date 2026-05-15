@@ -168,6 +168,11 @@ class DailyPlugin:
         if self._remaining_today() > 0:
             await self._schedule_bushi_loop(float(self._config.daily_bushi_interval_seconds))
 
+    def should_auto_return_after_send(self, text: str) -> bool:
+        if text != self._CMD_BUSHI:
+            return True
+        return self._remaining_today() <= 0
+
     def _matches_rare_event(self, normalized_text: str) -> bool:
         return all(anchor in normalized_text for anchor in self._RARE_EVENT_ANCHORS)
 

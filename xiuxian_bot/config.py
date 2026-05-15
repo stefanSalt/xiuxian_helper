@@ -672,7 +672,7 @@ class Config:
                 ),
             ),
             daily_bushi_interval_seconds=max(
-                120,
+                30,
                 _parse_int(
                     data.get("daily_bushi_interval_seconds") or 120,
                     "daily_bushi_interval_seconds",

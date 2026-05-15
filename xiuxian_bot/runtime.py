@@ -450,6 +450,18 @@ class AccountRunner:
                 return None
             return recent_sent_bindings.get(message_id)
 
+        def _should_auto_return_after_send(runtime: _IdentityRuntime, plugin: str, text: str) -> bool:
+            plugin_obj = next(
+                (item for item in runtime.plugins if getattr(item, "name", "") == plugin),
+                None,
+            )
+            if plugin_obj is None:
+                return True
+            should_return = getattr(plugin_obj, "should_auto_return_after_send", None)
+            if not callable(should_return):
+                return True
+            return bool(should_return(text))
+
         async def _enter_pause_mode(reason: str) -> None:
             nonlocal pause_mode_active
             if pause_mode_active and self._state == "paused" and self._message == reason:
@@ -526,6 +538,7 @@ class AccountRunner:
                     and target_key != "main"
                     and base_config.auto_return_main_after_avatar_action
                     and base_config.identity_by_key("main") is not None
+                    and _should_auto_return_after_send(runtime, plugin, text)
                 ):
                     async def _return_main() -> None:
                         async with identity_send_lock:

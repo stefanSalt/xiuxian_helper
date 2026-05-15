@@ -166,7 +166,7 @@ FORM_SECTIONS: list[tuple[str, list[dict[str, str]]]] = [
         [
             {"name": "daily_bushi_start_time", "label": "卜筮问天起始时间(HH:MM)", "type": "text"},
             {"name": "daily_bushi_times_per_day", "label": "卜筮问天每日次数(0-10)", "type": "number"},
-            {"name": "daily_bushi_interval_seconds", "label": "卜筮问天间隔(秒，至少120)", "type": "number"},
+            {"name": "daily_bushi_interval_seconds", "label": "卜筮问天间隔(秒，至少30)", "type": "number"},
             {"name": "daily_bushi_exchange_action", "label": "神物现世换取指令", "type": "text"},
         ],
     ),

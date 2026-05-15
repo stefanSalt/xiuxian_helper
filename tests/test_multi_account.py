@@ -842,6 +842,174 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
 
             repo.close()
 
+    async def test_account_runner_respects_plugin_auto_return_veto(self) -> None:
+        from xiuxian_bot.runtime import AccountRunner
+
+        sends: list[tuple[str, str]] = []
+        scheduled_return_main: list[tuple[float, object]] = []
+        stop_event = asyncio.Event()
+
+        class FakeScheduler:
+            def __init__(self, logger) -> None:  # type: ignore[no-untyped-def]
+                self.logger = logger
+
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                if "avatar:daily.bootstrap" in key:
+                    await action()
+                elif key == "__identity__:return_main":
+                    scheduled_return_main.append((delay_seconds, action))
+
+            async def cancel_all(self) -> None:
+                return None
+
+        class FakeAdapter:
+            def __init__(self, config, logger, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                _ = kwargs
+                self.config = config
+                self.logger = logger
+                self.me_id = 1
+                self._new_handler = None
+
+            def on_new_message(self, handler) -> None:  # type: ignore[no-untyped-def]
+                self._new_handler = handler
+
+            def on_message_edited(self, handler) -> None:  # type: ignore[no-untyped-def]
+                _ = handler
+
+            async def start(self) -> None:
+                return None
+
+            async def send_message(
+                self,
+                text: str,
+                *,
+                reply_to_topic: bool = True,
+                reply_to_msg_id: int | None = None,
+            ) -> int | None:
+                _ = (reply_to_topic, reply_to_msg_id)
+                sends.append(("adapter", text))
+                return 200 + len(sends)
+
+            async def build_context(self, event) -> MessageContext:  # type: ignore[no-untyped-def]
+                return event
+
+            async def run_forever(self) -> None:
+                await stop_event.wait()
+
+            async def stop(self) -> None:
+                stop_event.set()
+                return None
+
+        class FakeSender:
+            def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                self.kwargs = kwargs
+
+            async def send(
+                self,
+                plugin: str,
+                text: str,
+                reply_to_topic: bool,
+                *,
+                reply_to_msg_id: int | None = None,
+                identity_key: str | None = None,
+            ) -> int | None:
+                _ = (reply_to_topic, reply_to_msg_id, identity_key)
+                sends.append((plugin, text))
+                if text == ".切换 锐锋子":
+                    adapter = self.kwargs["send_message"].__self__
+                    assert adapter._new_handler is not None
+                    asyncio.create_task(
+                        adapter._new_handler(
+                            MessageContext(
+                                chat_id=-100,
+                                message_id=900,
+                                reply_to_msg_id=100 + len(sends),
+                                sender_id=999,
+                                text="切换成功！你的神念已附着在 【锐锋子】 之上。",
+                                ts=datetime.now(timezone.utc),
+                                is_reply=True,
+                                is_reply_to_me=True,
+                            )
+                        )
+                    )
+                return 100 + len(sends)
+
+        class MainPlugin:
+            name = "main"
+            enabled = True
+            priority = 10
+
+            async def on_message(self, ctx: MessageContext):  # type: ignore[no-untyped-def]
+                _ = ctx
+                return None
+
+        class AvatarDailyPlugin:
+            name = "daily"
+            enabled = True
+            priority = 10
+
+            async def bootstrap(self, scheduler, send) -> None:  # type: ignore[no-untyped-def]
+                await scheduler.schedule(
+                    key="daily.bootstrap",
+                    delay_seconds=0.0,
+                    action=lambda: send("daily", ".卜筮问天", True),
+                )
+
+            def should_auto_return_after_send(self, text: str) -> bool:
+                return text != ".卜筮问天"
+
+            async def on_message(self, ctx: MessageContext):  # type: ignore[no-untyped-def]
+                _ = ctx
+                return None
+
+        def fake_build_plugins(config, logger):  # type: ignore[no-untyped-def]
+            _ = logger
+            if config.my_name == "锐锋子":
+                return [AvatarDailyPlugin()]
+            return [MainPlugin()]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "app.sqlite3"
+            repo = AccountRepository(str(path), logging.getLogger("test"))
+            config = _dummy_config(
+                my_name="寒山子",
+                auto_return_main_delay_seconds=120,
+                identity_profiles=(
+                    IdentityProfile(
+                        key="main",
+                        kind="main",
+                        my_name="寒山子",
+                        switch_target="主魂",
+                        display_name="主魂",
+                    ),
+                    IdentityProfile(
+                        key="avatar",
+                        kind="avatar",
+                        my_name="锐锋子",
+                        switch_target="锐锋子",
+                        display_name="锐锋子",
+                    ),
+                ),
+            )
+            record = repo.create_account("alpha", config, enabled=True)
+            system_config = SystemConfig(app_db_path=str(path), log_dir=str(Path(tmpdir) / "logs"))
+            runner = AccountRunner(record, system_config)
+
+            with patch("xiuxian_bot.runtime.Scheduler", FakeScheduler), patch(
+                "xiuxian_bot.runtime.ReliableSender",
+                FakeSender,
+            ), patch("xiuxian_bot.runtime.TGAdapter", FakeAdapter), patch(
+                "xiuxian_bot.runtime.build_plugins",
+                side_effect=fake_build_plugins,
+            ):
+                await runner.start()
+                await asyncio.sleep(0.08)
+                await runner.stop()
+
+            self.assertIn(("daily", ".卜筮问天"), sends)
+            self.assertEqual(scheduled_return_main, [])
+            repo.close()
+
     async def test_account_runner_refreshes_delayed_return_main_after_avatar_actions(self) -> None:
         from xiuxian_bot.runtime import AccountRunner
 
