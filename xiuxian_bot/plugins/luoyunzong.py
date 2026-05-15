@@ -168,7 +168,7 @@ class LuoyunzongPlugin:
             self._log_status_decision(status, f"pending_{self._pending_action}", "skip")
             return None
         if self._is_guard_suppressed():
-            await self._schedule_status(float(self._GUARD_SUPPRESS_SECONDS))
+            await self._schedule_status(self._guard_suppress_remaining_seconds())
             self._log_status_decision(status, "guard_suppressed", "skip")
             return None
         self._guard_suppress_until = self._now() + timedelta(seconds=self._GUARD_SUPPRESS_SECONDS)
@@ -220,7 +220,7 @@ class LuoyunzongPlugin:
 
         if status["under_attack"]:
             if self._is_guard_suppressed():
-                await self._schedule_status(float(self._status_interval_seconds))
+                await self._schedule_status(self._guard_suppress_remaining_seconds())
                 self._log_status_decision(status, "guard_suppressed", "skip")
                 return None
             self._guard_suppress_until = self._now() + timedelta(seconds=self._GUARD_SUPPRESS_SECONDS)
@@ -396,9 +396,12 @@ class LuoyunzongPlugin:
         return self._harvest_remaining_seconds() > 0
 
     def _is_guard_suppressed(self) -> bool:
+        return self._guard_suppress_remaining_seconds() > 0
+
+    def _guard_suppress_remaining_seconds(self) -> float:
         if self._guard_suppress_until is None:
-            return False
-        return (self._guard_suppress_until - self._now()).total_seconds() > 0
+            return 0.0
+        return max(0.0, (self._guard_suppress_until - self._now()).total_seconds())
 
     def _status_owner_ttl_seconds(self, delay_seconds: float) -> float:
         return max(
@@ -679,7 +682,7 @@ class LuoyunzongPlugin:
             return "watering_success"
         if self._is_guard_cooldown_feedback(text):
             return "guard_cooldown"
-        if "协同守山" in text or "守山" in text:
+        if self._is_guard_success_feedback(text):
             return "guard"
         if "采摘灵果" in text or "采摘" in text or "奖励已入袋" in text:
             return "harvest"
@@ -697,6 +700,13 @@ class LuoyunzongPlugin:
     def _is_guard_cooldown_feedback(self, text: str) -> bool:
         return "守山" in text and "请在" in text and "后再来守山" in text
 
+    def _is_guard_success_feedback(self, text: str) -> bool:
+        return (
+            "守山成功" in text
+            and "护山大阵" in text
+            and ("大阵修复" in text or "宗门贡献" in text or "注入" in text)
+        )
+
     def _looks_like_action_feedback(self, text: str) -> bool:
         return any(
             token in text
@@ -705,7 +715,7 @@ class LuoyunzongPlugin:
                 "地脉灵气尚未恢复",
                 "后再来灌溉",
                 "无需灌溉",
-                "协同守山",
+                "守山成功",
                 "后再来守山",
                 "采摘灵果",
                 "奖励已入袋",

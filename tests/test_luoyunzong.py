@@ -105,6 +105,11 @@ WATERING_SUCCESS = """【🌿 灵树灌溉】
 WATERING_COOLDOWN = "地脉灵气尚未恢复，请在 1小时57分钟36秒 后再来灌溉。"
 WATERING_UNNEEDED = "灵眼之树已然成熟或正遭劫难，此刻无需灌溉，静待或守护即可。"
 GUARD_COOLDOWN = "你刚刚注入过灵力,经脉尚需调息! 请在4分钟43秒后再来守山"
+GUARD_SUCCESS = """【守山成功】
+你消耗了 200 点修为，为护山大阵注入了精纯的灵力！
+🛡️ 大阵修复: +63 耐久 (当前: 8767)
+🏅 宗门贡献: +14 点
+"""
 PUBLIC_GUARD_STARTED = """🚨 【警报！古剑门来袭！】 🚨
 古剑门的修士觊觎我宗灵眼之树，趁其生长关键之时大举来犯！护山大阵已开启！
 所有落云宗弟子请立刻使用 .协同守山 抵御外敌！
@@ -516,6 +521,80 @@ class TestLuoyunzongPlugin(unittest.IsolatedAsyncioTestCase):
             base_now + timedelta(minutes=4, seconds=43),
         )
         self.assertIsNone(plugin._pending_action)  # type: ignore[attr-defined]
+
+    async def test_guard_success_feedback_reschedules_status(self) -> None:
+        base_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+        plugin = LuoyunzongPlugin(
+            _dummy_config(luoyunzong_watering_strategy="always"),
+            logging.getLogger("test"),
+            now_fn=lambda: base_now,
+        )
+        calls: list[tuple[str, float, object]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                calls.append((key, delay_seconds, action))
+
+        async def _send(_plugin: str, _text: str, _reply_to_topic: bool) -> int | None:
+            return None
+
+        await plugin.bootstrap(_FakeScheduler(), _send)
+        await plugin.on_message(_ctx(ATTACK_STATUS))
+        calls.clear()
+        await plugin.on_message(_ctx(GUARD_SUCCESS))
+
+        self.assertIn(300.0, [delay for _, delay, _ in calls])
+        self.assertEqual(  # type: ignore[attr-defined]
+            plugin._guard_suppress_until,
+            base_now + timedelta(minutes=5),
+        )
+        self.assertIsNone(plugin._pending_action)  # type: ignore[attr-defined]
+
+    async def test_guard_prompt_text_does_not_refresh_guard_cooldown(self) -> None:
+        plugin = LuoyunzongPlugin(
+            _dummy_config(luoyunzong_watering_strategy="always"),
+            logging.getLogger("test"),
+        )
+
+        await plugin.on_message(_ctx("请速用 .协同守山！ 守山次数: 356"))
+
+        self.assertIsNone(plugin._guard_suppress_until)  # type: ignore[attr-defined]
+
+    async def test_guard_suppressed_status_reschedules_at_remaining_cooldown(self) -> None:
+        base_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+        plugin = LuoyunzongPlugin(
+            _dummy_config(luoyunzong_watering_strategy="always"),
+            logging.getLogger("test"),
+            now_fn=lambda: base_now,
+        )
+        calls: list[tuple[str, float, object]] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                calls.append((key, delay_seconds, action))
+
+        async def _send(_plugin: str, _text: str, _reply_to_topic: bool) -> int | None:
+            return None
+
+        await plugin.bootstrap(_FakeScheduler(), _send)
+        calls.clear()
+        plugin._guard_suppress_until = base_now + timedelta(seconds=90)  # type: ignore[attr-defined]
+
+        actions = await plugin.on_message(_ctx(ATTACK_STATUS))
+
+        self.assertIsNone(actions)
+        self.assertIn(90.0, [delay for _, delay, _ in calls])
+
+    def test_guard_status_text_is_not_action_feedback(self) -> None:
+        plugin = LuoyunzongPlugin(
+            _dummy_config(luoyunzong_watering_strategy="always"),
+            logging.getLogger("test"),
+        )
+
+        self.assertFalse(plugin._looks_like_action_feedback(ATTACK_STATUS))  # type: ignore[attr-defined]
+        self.assertIsNone(plugin._feedback_kind(ATTACK_STATUS))  # type: ignore[attr-defined]
+        self.assertFalse(plugin._looks_like_action_feedback(PUBLIC_GUARD_STARTED))  # type: ignore[attr-defined]
+        self.assertIsNone(plugin._feedback_kind(PUBLIC_GUARD_STARTED))  # type: ignore[attr-defined]
 
     async def test_pending_watering_expires_and_allows_retry(self) -> None:
         current_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
