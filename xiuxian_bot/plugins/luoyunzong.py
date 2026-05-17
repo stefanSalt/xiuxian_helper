@@ -28,9 +28,11 @@ class LuoyunzongPlugin:
     _CMD_HARVEST = ".采摘灵果"
     _STATUS_LOOP_KEY = "luoyunzong.status.loop"
     _LINGGEN_LOOP_KEY = "luoyunzong.linggen.loop"
+    _WATERING_RETRY_KEY = "luoyunzong.watering.retry"
     _STATE_KEY = "luoyunzong"
     _GUARD_SUPPRESS_SECONDS = 300
     _HARVEST_STATUS_CHECK_SECONDS = 4 * 3600
+    _WATERING_DIRECT_RETRY_WINDOW_SECONDS = 5 * 60
     _PENDING_ACTION_TTL_SECONDS = 5 * 60
     _STATUS_OWNER_MIN_TTL_SECONDS = 10 * 60
     _VALID_WATERING_STRATEGIES = {"match_linggen", "always", "match_need"}
@@ -247,7 +249,11 @@ class LuoyunzongPlugin:
             self._log_status_decision(status, water_reason, self._CMD_WATER)
             return [self._action(self._CMD_WATER, message_id)]
 
-        await self._schedule_status(self._status_delay_after_decision(water_reason))
+        direct_retry_scheduled = (
+            await self._schedule_watering_retry_after_short_cooldown(status["needs"])
+        )
+        if not direct_retry_scheduled:
+            await self._schedule_status(self._status_delay_after_decision(water_reason))
         self._log_status_decision(status, water_reason, "skip")
         return None
 
@@ -342,6 +348,58 @@ class LuoyunzongPlugin:
             delay_seconds=max(0.0, float(delay_seconds)),
             action=_runner,
         )
+
+    async def _schedule_watering_retry_after_short_cooldown(
+        self, needs: object
+    ) -> bool:
+        if not isinstance(needs, list):
+            return False
+        remaining = self._watering_cooldown_remaining_seconds()
+        if (
+            remaining <= 0
+            or remaining > float(self._WATERING_DIRECT_RETRY_WINDOW_SECONDS)
+        ):
+            return False
+        if not self._would_water_without_cooldown([str(need) for need in needs]):
+            return False
+        await self._schedule_watering_retry(remaining)
+        return True
+
+    async def _schedule_watering_retry(self, delay_seconds: float) -> None:
+        if self._scheduler is None:
+            return
+
+        async def _runner() -> None:
+            await self._watering_retry_loop()
+
+        await self._scheduler.schedule(
+            key=self._WATERING_RETRY_KEY,
+            delay_seconds=max(0.0, float(delay_seconds)),
+            action=_runner,
+        )
+
+    async def _watering_retry_loop(self) -> None:
+        if not self.enabled or self._send is None:
+            return
+        remaining = self._watering_cooldown_remaining_seconds()
+        if remaining > 1:
+            if remaining <= float(self._WATERING_DIRECT_RETRY_WINDOW_SECONDS):
+                await self._schedule_watering_retry(remaining)
+            else:
+                await self._schedule_status(
+                    self._status_delay_after_decision("watering_cooldown")
+                )
+            return
+        if self._pending_action is not None and not self._expire_pending_action():
+            await self._schedule_status(float(self._status_interval_seconds))
+            return
+        if not self._last_status_is_recently_safe_to_water():
+            await self._schedule_status(0.0)
+            return
+        self._set_pending_action("watering")
+        self._save_state()
+        await self._send(self.name, self._CMD_WATER, True)
+        await self._schedule_status(float(self._status_interval_seconds))
 
     def _action(self, text: str, source_message_id: int) -> SendAction:
         return SendAction(
@@ -556,6 +614,12 @@ class LuoyunzongPlugin:
             return False, "no_needs"
         if self._watering_next_at is not None and self._watering_next_at > self._now():
             return False, "watering_cooldown"
+        return self._watering_strategy_decision(needs)
+
+    def _would_water_without_cooldown(self, needs: list[str]) -> bool:
+        return self._watering_strategy_decision(needs)[0]
+
+    def _watering_strategy_decision(self, needs: list[str]) -> tuple[bool, str]:
         if self._watering_strategy == "always":
             return True, "always"
         if self._watering_strategy == "match_need":
@@ -565,6 +629,17 @@ class LuoyunzongPlugin:
             return False, "linggen_missing"
         matched = any(need and need in self._linggen for need in needs)
         return matched, "linggen_match" if matched else "linggen_mismatch"
+
+    def _last_status_is_recently_safe_to_water(self) -> bool:
+        if self._last_status_seen_at is None:
+            return False
+        age_seconds = (self._now() - self._last_status_seen_at).total_seconds()
+        return (
+            0 <= age_seconds <= float(self._WATERING_DIRECT_RETRY_WINDOW_SECONDS)
+            and not self._last_status_mature
+            and not self._last_status_under_attack
+            and bool(self._last_status_needs)
+        )
 
     def _log_status_decision(
         self,

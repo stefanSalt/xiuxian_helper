@@ -429,6 +429,46 @@ class TestLuoyunzongPlugin(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(actions)
         self.assertIn(660.0, [delay for _, delay, _ in calls])
 
+    async def test_short_watering_cooldown_schedules_direct_retry(self) -> None:
+        current_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+        plugin = LuoyunzongPlugin(
+            _dummy_config(luoyunzong_watering_strategy="always"),
+            logging.getLogger("test"),
+            now_fn=lambda: current_now,
+        )
+        plugin._watering_next_at = current_now + timedelta(seconds=7)  # type: ignore[attr-defined]
+        calls: list[tuple[str, float, object]] = []
+        sends: list[str] = []
+
+        class _FakeScheduler:
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                calls.append((key, delay_seconds, action))
+
+        async def _send(_plugin: str, text: str, _reply_to_topic: bool) -> int | None:
+            sends.append(text)
+            return 1000 + len(sends)
+
+        await plugin.bootstrap(_FakeScheduler(), _send)
+        calls.clear()
+
+        actions = await plugin.on_message(_ctx(NORMAL_STATUS))
+
+        self.assertIsNone(actions)
+        retry = [
+            (delay, action)
+            for key, delay, action in calls
+            if key == "luoyunzong.watering.retry"
+        ]
+        self.assertEqual(len(retry), 1)
+        self.assertEqual(retry[0][0], 7.0)
+        self.assertNotIn("luoyunzong.status.loop", [key for key, _, _ in calls])
+
+        current_now = current_now + timedelta(seconds=7)
+        await retry[0][1]()
+
+        self.assertEqual(sends, [".灵树灌溉"])
+        self.assertEqual(plugin._pending_action, "watering")  # type: ignore[attr-defined]
+
     async def test_watering_state_waits_for_feedback(self) -> None:
         base_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
         plugin = LuoyunzongPlugin(
@@ -735,11 +775,11 @@ class TestLuoyunzongPlugin(unittest.IsolatedAsyncioTestCase):
             calls_b.clear()
 
             await plugin_a.on_global_status(_ctx(NORMAL_STATUS))
-            plugin_b._watering_next_at = base_now + timedelta(minutes=2)  # type: ignore[attr-defined]
+            plugin_b._watering_next_at = base_now + timedelta(minutes=6)  # type: ignore[attr-defined]
             actions_b = await plugin_b.on_global_status(_ctx(NORMAL_STATUS))
 
             self.assertIsNone(actions_b)
-            self.assertIn(120.0, [delay for _, delay, _ in calls_b])
+            self.assertIn(360.0, [delay for _, delay, _ in calls_b])
             self.assertEqual(
                 global_store.load_state("luoyunzong")["status_owner"],
                 plugin_b._status_owner_key,  # type: ignore[attr-defined]
