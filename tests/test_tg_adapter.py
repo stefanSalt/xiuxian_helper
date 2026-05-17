@@ -4,9 +4,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from telethon.errors.rpcbaseerrors import BadRequestError
+from telethon.tl import types
 
 from xiuxian_bot.config import Config, IdentityProfile
-from xiuxian_bot.tg_adapter import TGAdapter
+from xiuxian_bot.tg_adapter import TGAdapter, _send_as_options_from_result
 
 
 def _dummy_config(*, topic_id: int = 7310786) -> Config:
@@ -114,6 +115,61 @@ class TestTGAdapter(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.reply_to.reply_to_msg_id, 7310786)
         self.assertEqual(request.reply_to.top_msg_id, 7310786)
 
+    async def test_send_message_to_topic_can_send_as_channel(self) -> None:
+        adapter = TGAdapter(_dummy_config(), logging.getLogger("test.tg_adapter"))
+        adapter._peer = object()
+        adapter._client = AsyncMock(return_value=SimpleNamespace(id=322))
+
+        mid = await adapter.send_message(
+            ".灵树状态",
+            reply_to_topic=True,
+            send_as="@luoyun_channel",
+        )
+
+        self.assertEqual(mid, 322)
+        request = adapter._client.call_args.args[0]
+        self.assertEqual(request.send_as, "@luoyun_channel")
+        self.assertEqual(request.reply_to.top_msg_id, 7310786)
+
+    async def test_send_message_to_topic_can_send_as_private_channel_id(self) -> None:
+        adapter = TGAdapter(_dummy_config(), logging.getLogger("test.tg_adapter"))
+        adapter._peer = object()
+        adapter._client = AsyncMock(return_value=SimpleNamespace(id=323))
+
+        mid = await adapter.send_message(
+            ".灵树状态",
+            reply_to_topic=True,
+            send_as="-1001234567890",
+        )
+
+        self.assertEqual(mid, 323)
+        request = adapter._client.call_args.args[0]
+        self.assertEqual(request.send_as, -1001234567890)
+
+    def test_send_as_options_prefer_username_and_keep_private_peer_id(self) -> None:
+        result = SimpleNamespace(
+            peers=[
+                types.SendAsPeer(types.PeerChannel(1001)),
+                types.SendAsPeer(types.PeerChannel(1002)),
+                types.SendAsPeer(types.PeerUser(2001), premium_required=True),
+            ],
+            chats=[
+                SimpleNamespace(id=1001, title="落云公告", username="luoyun_channel"),
+                SimpleNamespace(id=1002, title="私密频道", username=""),
+            ],
+            users=[
+                SimpleNamespace(id=2001, first_name="主账号", last_name="", username="salt9527"),
+            ],
+        )
+
+        options = _send_as_options_from_result(result)
+
+        self.assertEqual([option.value for option in options], ["@luoyun_channel", "-1000000001002", "@salt9527"])
+        self.assertEqual(options[0].label, "落云公告 (@luoyun_channel)")
+        self.assertEqual(options[1].label, "私密频道 (-1000000001002)")
+        self.assertTrue(options[2].premium_required)
+        self.assertIn("Premium", options[2].label)
+
     async def test_send_message_to_specific_topic_reply_keeps_message_and_topic_ids(self) -> None:
         adapter = TGAdapter(_dummy_config(), logging.getLogger("test.tg_adapter"))
         adapter._peer = object()
@@ -136,6 +192,25 @@ class TestTGAdapter(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(mid, 987)
         adapter._client.send_message.assert_awaited_once_with(-100, ".闭关修炼")
+
+    async def test_send_message_fallback_preserves_send_as_channel(self) -> None:
+        adapter = TGAdapter(_dummy_config(), logging.getLogger("test.tg_adapter"))
+        adapter._peer = object()
+        adapter._client = AsyncMock(side_effect=BadRequestError(object(), "TOPIC_CLOSED"))
+        adapter._client.send_message = AsyncMock(return_value=SimpleNamespace(id=988))
+
+        mid = await adapter.send_message(
+            ".闭关修炼",
+            reply_to_topic=True,
+            send_as="@luoyun_channel",
+        )
+
+        self.assertEqual(mid, 988)
+        adapter._client.send_message.assert_awaited_once_with(
+            -100,
+            ".闭关修炼",
+            send_as="@luoyun_channel",
+        )
 
     async def test_send_message_keeps_topic_closed_error_for_explicit_reply(self) -> None:
         adapter = TGAdapter(_dummy_config(), logging.getLogger("test.tg_adapter"))

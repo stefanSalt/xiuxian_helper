@@ -58,6 +58,7 @@ class ReliableSender:
         *,
         reply_to_msg_id: int | None = None,
         identity_key: str | None = None,
+        send_as: str | None = None,
     ) -> int | None:
         identity_prefix = f"[{identity_key}] " if identity_key else ""
         if self._dry_run:
@@ -97,10 +98,15 @@ class ReliableSender:
 
                 self._last_attempt_at = self._monotonic()
                 try:
+                    kwargs = {
+                        "reply_to_topic": reply_to_topic,
+                        "reply_to_msg_id": reply_to_msg_id,
+                    }
+                    if send_as:
+                        kwargs["send_as"] = send_as
                     mid = await self._send_message(
                         text,
-                        reply_to_topic=reply_to_topic,
-                        reply_to_msg_id=reply_to_msg_id,
+                        **kwargs,
                     )
                 except Exception as exc:
                     send_retries += 1

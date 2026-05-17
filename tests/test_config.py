@@ -35,12 +35,22 @@ class TestConfig(unittest.TestCase):
                         "game_id": "7467781636",
                         "config_overrides": {"enable_chuangta": True},
                     },
+                    {
+                        "key": "luoyun_channel",
+                        "kind": "channel",
+                        "my_name": "落云频道",
+                        "display_name": "落云频道",
+                        "send_as": "@luoyun_test",
+                    },
                 ],
             }
         )
 
         self.assertEqual(config.active_identity.key, "ruifengzi")
         self.assertEqual(config.identities[0].tg_username, "salt9527")
+        self.assertTrue(config.identities[2].is_channel)
+        self.assertEqual(config.identities[2].send_as, "@luoyun_test")
+        self.assertIn("@luoyun_test", config.all_identity_mentions)
         self.assertTrue(config.apply_identity("ruifengzi").enable_chuangta)
         self.assertEqual(config.apply_identity("ruifengzi").my_name, "锐锋子")
 

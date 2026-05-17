@@ -15,7 +15,7 @@ from urllib.parse import urlencode
 
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -28,6 +28,7 @@ from .core.system_settings_repository import (
     SystemSettingsRepository,
 )
 from .runtime import RunnerManager, _resolve_session_name, setup_root_logger
+from .tg_adapter import list_send_as_options
 from .tg_login import TGLoginService
 
 
@@ -481,6 +482,7 @@ def _parse_identity_profiles_from_form(form) -> list[dict[str, Any]]:
     display_names = _form_list(form, "identity_display_name")
     game_ids = _form_list(form, "identity_game_id")
     tg_usernames = _form_list(form, "identity_tg_username")
+    send_as_values = _form_list(form, "identity_send_as")
     override_values = {
         field["name"]: _form_list(form, f"identity_override_{field['name']}")
         for field in IDENTITY_PLUGIN_FIELDS
@@ -498,10 +500,14 @@ def _parse_identity_profiles_from_form(form) -> list[dict[str, Any]]:
         display_name = _list_get(display_names, index) or ("主魂" if kind == "main" else my_name)
         game_id = _list_get(game_ids, index)
         tg_username = _list_get(tg_usernames, index).lstrip("@")
-        if not any((key, my_name, switch_target, display_name, game_id, tg_username)):
+        send_as = _list_get(send_as_values, index)
+        if not any((key, my_name, switch_target, display_name, game_id, tg_username, send_as)):
             continue
         if kind == "main":
             key = "main"
+            send_as = ""
+        if kind == "channel" and not send_as:
+            raise ValueError(f"频道身份 {key} 必须填写发送频道")
         if key in seen_keys:
             raise ValueError(f"身份 key 重复: {key}")
         seen_keys.add(key)
@@ -522,6 +528,7 @@ def _parse_identity_profiles_from_form(form) -> list[dict[str, Any]]:
                 "display_name": display_name,
                 "game_id": game_id,
                 "tg_username": tg_username,
+                "send_as": send_as,
                 "config_overrides": config_overrides,
             }
         )
@@ -1471,9 +1478,35 @@ def create_app() -> FastAPI:
                 action=f"/accounts/{account_id}/edit",
                 values=_template_values_for_account(record),
                 form_sections=FORM_SECTIONS,
+                send_as_options_url=f"/accounts/{account_id}/send-as-options",
                 error="",
             ),
         )
+
+    @app.get("/accounts/{account_id}/send-as-options")
+    async def account_send_as_options(request: Request, account_id: int):
+        system_config: SystemConfig = request.app.state.system_config
+        if not _is_authenticated(request, system_config):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        repository: AccountRepository = request.app.state.repository
+        logger: logging.Logger = request.app.state.logger
+        record = repository.get_account(account_id)
+        if record is None:
+            return JSONResponse({"error": "account not found"}, status_code=404)
+        config = record.config.with_identity(
+            account_id=str(record.id),
+            account_name=record.name,
+            state_db_path=system_config.app_db_path,
+        )
+        config = config.with_session_name(
+            _resolve_session_name(system_config, config.tg_session_name)
+        )
+        try:
+            options = await list_send_as_options(config, logger)
+        except Exception as exc:
+            logger.warning("send_as_options_failed account_id=%s error=%s", account_id, exc)
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return {"options": [option.to_dict() for option in options]}
 
     @app.post("/accounts/{account_id}/edit")
     async def account_update(request: Request, account_id: int):

@@ -30,6 +30,7 @@
         <select name="identity_kind">
           <option value="main" {% if identity.get('kind') == 'main' %}selected{% endif %}>主魂</option>
           <option value="avatar" {% if identity.get('kind', 'avatar' if index > 0 else 'main') == 'avatar' %}selected{% endif %}>化身</option>
+          <option value="channel" {% if identity.get('kind') == 'channel' %}selected{% endif %}>频道身份</option>
         </select>
       </label>
       <label class="field">
@@ -51,6 +52,19 @@
       <label class="field">
         <span>游戏 ID</span>
         <input type="text" name="identity_game_id" value="{{ identity.get('game_id', '') }}">
+      </label>
+      <label class="field">
+        <span>发送频道 send_as</span>
+        <input type="text" name="identity_send_as" value="{{ identity.get('send_as', '') }}" data-send-as-input>
+        <div class="inline-actions">
+          <select data-send-as-select disabled>
+            <option value="">点击获取后选择</option>
+          </select>
+          <button type="button" class="btn btn-light" data-load-send-as {% if not send_as_options_url|default('') %}disabled{% endif %}>获取频道</button>
+        </div>
+        {% if not send_as_options_url|default('') %}
+        <span class="muted">保存账号后可自动获取。</span>
+        {% endif %}
       </label>
     </div>
     <div class="identity-overrides">
@@ -108,7 +122,7 @@
 
     <fieldset class="form-section identity-section">
       <legend>身份配置</legend>
-      <p class="muted">第一行固定为主魂；化身会在执行各自任务前自动切换。</p>
+      <p class="muted">第一行固定为主魂；化身会自动切换，频道身份会以配置的 send_as 发言。</p>
       <div class="identity-tabs" id="identity-tabs" role="tablist">
         {% for identity in values.get('identity_profiles', []) %}
         <button type="button" class="identity-tab{% if loop.first %} active{% endif %}" data-identity-tab>{{ identity.get('display_name') or identity.get('my_name') or identity.get('key') or ('主魂' if loop.first else '化身') }}</button>
@@ -120,7 +134,7 @@
         {% endfor %}
       </div>
       <div class="actions">
-        <button type="button" class="btn btn-light" id="add-identity">新增化身</button>
+        <button type="button" class="btn btn-light" id="add-identity">新增身份</button>
       </div>
     </fieldset>
 
@@ -132,13 +146,15 @@
 </section>
 
 <template id="identity-template">
-  {{ identity_panel({"key": "", "kind": "avatar", "my_name": "", "switch_target": "", "display_name": "", "game_id": "", "tg_username": "", "config_overrides": {}}, 1, true) }}
+  {{ identity_panel({"key": "", "kind": "avatar", "my_name": "", "switch_target": "", "display_name": "", "game_id": "", "tg_username": "", "send_as": "", "config_overrides": {}}, 1, true) }}
 </template>
 
 <script>
   const identityList = document.getElementById('identity-list');
   const identityTemplate = document.getElementById('identity-template');
   const identityTabs = document.getElementById('identity-tabs');
+  const sendAsOptionsUrl = "{{ send_as_options_url|default('') }}";
+  let sendAsOptionsCache = null;
 
   function identityPanels() {
     return Array.from(identityList?.querySelectorAll('[data-identity-row]') || []);
@@ -149,7 +165,9 @@
     const displayName = panel.querySelector('[name="identity_display_name"]')?.value.trim();
     const myName = panel.querySelector('[name="identity_my_name"]')?.value.trim();
     const key = panel.querySelector('[name="identity_key"]')?.value.trim();
-    return displayName || myName || key || `化身 ${index}`;
+    const kind = panel.querySelector('[name="identity_kind"]')?.value;
+    const fallback = kind === 'channel' ? `频道身份 ${index}` : `化身 ${index}`;
+    return displayName || myName || key || fallback;
   }
 
   function activateIdentity(index) {
@@ -176,10 +194,10 @@
       button.addEventListener('click', () => activateIdentity(index));
       identityTabs.appendChild(button);
 
-      panel.querySelector('[data-identity-heading]').textContent = index === 0 ? '主魂' : '化身';
+      const kindSelect = panel.querySelector('[name="identity_kind"]');
+      panel.querySelector('[data-identity-heading]').textContent = index === 0 ? '主魂' : (kindSelect.value === 'channel' ? '频道身份' : '化身');
       panel.querySelector('[data-remove-identity]').disabled = index === 0;
       const keyInput = panel.querySelector('[name="identity_key"]');
-      const kindSelect = panel.querySelector('[name="identity_kind"]');
       if (index === 0) {
         keyInput.value = 'main';
         keyInput.readOnly = true;
@@ -197,7 +215,52 @@
     identityList.appendChild(node);
     syncIdentityTabs(identityPanels().length - 1);
   });
+
+  async function loadSendAsOptions() {
+    if (!sendAsOptionsUrl) throw new Error('保存账号后可自动获取发送频道');
+    if (sendAsOptionsCache) return sendAsOptionsCache;
+    const response = await fetch(sendAsOptionsUrl, {headers: {'Accept': 'application/json'}});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '获取发送频道失败');
+    sendAsOptionsCache = Array.isArray(data.options) ? data.options : [];
+    return sendAsOptionsCache;
+  }
+
+  function populateSendAsSelect(select, options, currentValue) {
+    select.replaceChildren();
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = options.length ? '选择发送频道' : '未发现可用发送身份';
+    select.appendChild(placeholder);
+    options.forEach((option) => {
+      const item = document.createElement('option');
+      item.value = option.value || '';
+      item.textContent = option.label || option.value || '';
+      if (item.value && item.value === currentValue) item.selected = true;
+      select.appendChild(item);
+    });
+    select.disabled = false;
+  }
+
   identityList?.addEventListener('click', (event) => {
+    const loadButton = event.target.closest('[data-load-send-as]');
+    if (loadButton) {
+      const panel = loadButton.closest('[data-identity-row]');
+      const input = panel?.querySelector('[data-send-as-input]');
+      const select = panel?.querySelector('[data-send-as-select]');
+      if (!input || !select) return;
+      loadButton.disabled = true;
+      const originalText = loadButton.textContent;
+      loadButton.textContent = '获取中...';
+      loadSendAsOptions()
+        .then((options) => populateSendAsSelect(select, options, input.value.trim()))
+        .catch((error) => window.alert(error.message || '获取发送频道失败'))
+        .finally(() => {
+          loadButton.disabled = false;
+          loadButton.textContent = originalText;
+        });
+      return;
+    }
     const button = event.target.closest('[data-remove-identity]');
     if (!button || button.disabled) return;
     const panels = identityPanels();
@@ -205,8 +268,13 @@
     button.closest('[data-identity-row]')?.remove();
     syncIdentityTabs(Math.max(0, index - 1));
   });
+  identityList?.addEventListener('change', (event) => {
+    if (!event.target.matches('[data-send-as-select]')) return;
+    const input = event.target.closest('[data-identity-row]')?.querySelector('[data-send-as-input]');
+    if (input && event.target.value) input.value = event.target.value;
+  });
   identityList?.addEventListener('input', (event) => {
-    if (event.target.matches('[name="identity_display_name"], [name="identity_my_name"], [name="identity_key"]')) {
+    if (event.target.matches('[name="identity_display_name"], [name="identity_my_name"], [name="identity_key"], [name="identity_kind"]')) {
       syncIdentityTabs();
     }
   });

@@ -1,15 +1,37 @@
 from __future__ import annotations
 
 import logging
+import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable
 
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, utils
 from telethon.errors.rpcbaseerrors import BadRequestError
 from telethon.tl import functions, types
 
 from .config import Config
 from .core.contracts import MessageContext
+
+
+@dataclass(frozen=True)
+class SendAsOption:
+    value: str
+    label: str
+    peer_id: int | None = None
+    username: str = ""
+    kind: str = ""
+    premium_required: bool = False
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "value": self.value,
+            "label": self.label,
+            "peer_id": self.peer_id,
+            "username": self.username,
+            "kind": self.kind,
+            "premium_required": self.premium_required,
+        }
 
 
 class TGAdapter:
@@ -121,7 +143,9 @@ class TGAdapter:
         *,
         reply_to_topic: bool = True,
         reply_to_msg_id: int | None = None,
+        send_as: str | None = None,
     ) -> int | None:
+        send_as_peer = _coerce_send_as_peer(send_as)
         if reply_to_topic and self._config.send_to_topic:
             topic_reply_to_msg_id = reply_to_msg_id or self._config.topic_id
             # Forum topic messages are anchored to the topic starter message ID.
@@ -132,6 +156,7 @@ class TGAdapter:
                     reply_to_msg_id=topic_reply_to_msg_id,
                     top_msg_id=self._config.topic_id,
                 ),
+                send_as=send_as_peer,
             )
             try:
                 result = await self._client(request)
@@ -149,6 +174,8 @@ class TGAdapter:
         kwargs = {}
         if reply_to_msg_id is not None:
             kwargs["reply_to"] = reply_to_msg_id
+        if send_as_peer is not None:
+            kwargs["send_as"] = send_as_peer
         msg = await self._client.send_message(self._config.game_chat_id, text, **kwargs)
         mid = getattr(msg, "id", None)
         return mid if isinstance(mid, int) and mid > 0 else None
@@ -214,3 +241,100 @@ class TGAdapter:
             is_from_system_identity=is_from_system_identity,
             is_system_reply=is_system_reply,
         )
+
+
+async def list_send_as_options(config: Config, logger: logging.Logger) -> list[SendAsOption]:
+    client = TelegramClient(config.tg_session_name, config.tg_api_id, config.tg_api_hash)
+    await client.connect()
+    try:
+        if not await client.is_user_authorized():
+            raise RuntimeError("TG session 未登录，无法获取发送频道列表")
+        peer = await client.get_input_entity(config.game_chat_id)
+        result = await client(functions.channels.GetSendAsRequest(peer=peer))
+        options = _send_as_options_from_result(result)
+        logger.info("send_as_options_loaded count=%s chat_id=%s", len(options), config.game_chat_id)
+        return options
+    finally:
+        await client.disconnect()
+
+
+def _coerce_send_as_peer(send_as: str | int | None) -> str | int | None:
+    if isinstance(send_as, int):
+        return send_as
+    value = str(send_as or "").strip()
+    if not value:
+        return None
+    if re.fullmatch(r"-?\d+", value):
+        return int(value)
+    return value
+
+
+def _send_as_options_from_result(result) -> list[SendAsOption]:  # type: ignore[no-untyped-def]
+    chats = {getattr(chat, "id", None): chat for chat in getattr(result, "chats", [])}
+    users = {getattr(user, "id", None): user for user in getattr(result, "users", [])}
+    options: list[SendAsOption] = []
+    seen_values: set[str] = set()
+    for item in getattr(result, "peers", []):
+        peer = getattr(item, "peer", None)
+        entity = _entity_for_send_as_peer(peer, chats, users)
+        peer_id = _peer_id(peer)
+        username = str(getattr(entity, "username", "") or "").strip()
+        value = f"@{username.lstrip('@')}" if username else str(peer_id or "")
+        if not value or value in seen_values:
+            continue
+        seen_values.add(value)
+        label = _send_as_label(entity, value)
+        if getattr(item, "premium_required", False):
+            label = f"{label}（需 Premium）"
+        options.append(
+            SendAsOption(
+                value=value,
+                label=label,
+                peer_id=peer_id,
+                username=username,
+                kind=_send_as_kind(peer, entity),
+                premium_required=bool(getattr(item, "premium_required", False)),
+            )
+        )
+    return options
+
+
+def _entity_for_send_as_peer(peer, chats, users):  # type: ignore[no-untyped-def]
+    if isinstance(peer, types.PeerUser):
+        return users.get(peer.user_id)
+    if isinstance(peer, types.PeerChat):
+        return chats.get(peer.chat_id)
+    if isinstance(peer, types.PeerChannel):
+        return chats.get(peer.channel_id)
+    return None
+
+
+def _peer_id(peer) -> int | None:  # type: ignore[no-untyped-def]
+    try:
+        value = utils.get_peer_id(peer)
+    except Exception:
+        return None
+    return value if isinstance(value, int) else None
+
+
+def _send_as_label(entity, value: str) -> str:  # type: ignore[no-untyped-def]
+    title = str(getattr(entity, "title", "") or "").strip()
+    if not title:
+        first_name = str(getattr(entity, "first_name", "") or "").strip()
+        last_name = str(getattr(entity, "last_name", "") or "").strip()
+        title = " ".join(part for part in (first_name, last_name) if part)
+    if not title:
+        title = value
+    username = str(getattr(entity, "username", "") or "").strip()
+    suffix = f"@{username.lstrip('@')}" if username else value
+    return title if title == suffix else f"{title} ({suffix})"
+
+
+def _send_as_kind(peer, entity) -> str:  # type: ignore[no-untyped-def]
+    if isinstance(peer, types.PeerUser):
+        return "user"
+    if isinstance(entity, types.Channel):
+        return "channel"
+    if isinstance(peer, types.PeerChat):
+        return "chat"
+    return "peer"

@@ -842,6 +842,313 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
 
             repo.close()
 
+    async def test_account_runner_channel_identity_sends_as_without_switching(self) -> None:
+        from xiuxian_bot.runtime import AccountRunner
+
+        sends: list[tuple[str, str, str | None, str | None]] = []
+        scheduled_return_main: list[tuple[float, object]] = []
+        stop_event = asyncio.Event()
+
+        class FakeScheduler:
+            def __init__(self, logger) -> None:  # type: ignore[no-untyped-def]
+                self.logger = logger
+
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                if "channel:channel.bootstrap" in key:
+                    await action()
+                elif key == "__identity__:return_main":
+                    scheduled_return_main.append((delay_seconds, action))
+
+            async def cancel_all(self) -> None:
+                return None
+
+        class FakeAdapter:
+            def __init__(self, config, logger, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                _ = kwargs
+                self.config = config
+                self.logger = logger
+                self.me_id = 1
+
+            def on_new_message(self, handler) -> None:  # type: ignore[no-untyped-def]
+                _ = handler
+
+            def on_message_edited(self, handler) -> None:  # type: ignore[no-untyped-def]
+                _ = handler
+
+            async def start(self) -> None:
+                return None
+
+            async def send_message(self, *_args, **_kwargs) -> int | None:  # type: ignore[no-untyped-def]
+                return 1
+
+            async def build_context(self, event) -> MessageContext:  # type: ignore[no-untyped-def]
+                return event
+
+            async def run_forever(self) -> None:
+                await stop_event.wait()
+
+            async def stop(self) -> None:
+                stop_event.set()
+                return None
+
+        class FakeSender:
+            def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                self.kwargs = kwargs
+
+            async def send(
+                self,
+                plugin: str,
+                text: str,
+                reply_to_topic: bool,
+                *,
+                reply_to_msg_id: int | None = None,
+                identity_key: str | None = None,
+                send_as: str | None = None,
+            ) -> int | None:
+                _ = (reply_to_topic, reply_to_msg_id)
+                sends.append((plugin, text, identity_key, send_as))
+                return 100 + len(sends)
+
+        class MainPlugin:
+            name = "main"
+            enabled = True
+            priority = 10
+
+            async def on_message(self, ctx: MessageContext):  # type: ignore[no-untyped-def]
+                _ = ctx
+                return None
+
+        class ChannelPlugin:
+            name = "channel"
+            enabled = True
+            priority = 10
+
+            async def bootstrap(self, scheduler, send) -> None:  # type: ignore[no-untyped-def]
+                await scheduler.schedule(
+                    key="channel.bootstrap",
+                    delay_seconds=0.0,
+                    action=lambda: send("channel", ".灵树状态", True),
+                )
+
+            async def on_message(self, ctx: MessageContext):  # type: ignore[no-untyped-def]
+                _ = ctx
+                return None
+
+        def fake_build_plugins(config, logger):  # type: ignore[no-untyped-def]
+            _ = logger
+            if config.active_identity.is_channel:
+                return [ChannelPlugin()]
+            return [MainPlugin()]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "app.sqlite3"
+            repo = AccountRepository(str(path), logging.getLogger("test"))
+            config = _dummy_config(
+                my_name="寒山子",
+                identity_profiles=(
+                    IdentityProfile(
+                        key="main",
+                        kind="main",
+                        my_name="寒山子",
+                        switch_target="主魂",
+                        display_name="主魂",
+                    ),
+                    IdentityProfile(
+                        key="channel",
+                        kind="channel",
+                        my_name="频道子",
+                        switch_target="",
+                        display_name="频道子",
+                        send_as="@luoyun_channel",
+                    ),
+                ),
+            )
+            record = repo.create_account("alpha", config, enabled=True)
+            system_config = SystemConfig(app_db_path=str(path), log_dir=str(Path(tmpdir) / "logs"))
+            runner = AccountRunner(record, system_config)
+
+            with patch("xiuxian_bot.runtime.Scheduler", FakeScheduler), patch(
+                "xiuxian_bot.runtime.ReliableSender",
+                FakeSender,
+            ), patch("xiuxian_bot.runtime.TGAdapter", FakeAdapter), patch(
+                "xiuxian_bot.runtime.build_plugins",
+                side_effect=fake_build_plugins,
+            ):
+                await runner.start()
+                await asyncio.sleep(0.05)
+                self.assertEqual(
+                    sends,
+                    [("channel", ".灵树状态", "channel", "@luoyun_channel")],
+                )
+                self.assertEqual(scheduled_return_main, [])
+                await runner.stop()
+
+            repo.close()
+
+    async def test_luoyunzong_global_status_channel_identity_updates_feedback_state(self) -> None:
+        from xiuxian_bot.plugins.luoyunzong import LuoyunzongPlugin
+        from xiuxian_bot.runtime import AccountRunner
+
+        status_text = (
+            "【落云宗 · 灵眼之树】\n"
+            "🌿 环境: 生机萎靡 (需 木/森/草)\n"
+            "🌲 进度:\n"
+            "🟩🟩🟩⬜ 31.20%\n"
+            "🔄 阶段: 2 / 4\n"
+            "👤 你的当前状态: 300 点\n"
+        )
+        feedback_text = (
+            "【🌿 灵树灌溉】\n"
+            "当前环境: 生机萎靡 (需 木/森/草)\n"
+            "你注入了: 木行 灵气\n"
+            "🌳 成熟度: 31.20% -> 31.30%\n"
+            "🏅 宗门贡献: +30\n"
+        )
+        sends: list[tuple[str, str, str | None, str | None]] = []
+        sent_ids: dict[str, int] = {}
+
+        class FakeScheduler:
+            def __init__(self, logger) -> None:  # type: ignore[no-untyped-def]
+                self.logger = logger
+
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                _ = (key, delay_seconds, action)
+                return None
+
+            async def cancel_all(self) -> None:
+                return None
+
+        class FakeAdapter:
+            def __init__(self, config, logger, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                _ = (config, logger, kwargs)
+                self.me_id = 1
+                self._new_handler = None
+
+            def on_new_message(self, handler) -> None:  # type: ignore[no-untyped-def]
+                self._new_handler = handler
+
+            def on_message_edited(self, handler) -> None:  # type: ignore[no-untyped-def]
+                _ = handler
+
+            async def start(self) -> None:
+                return None
+
+            async def send_message(self, *_args, **_kwargs) -> int | None:  # type: ignore[no-untyped-def]
+                return 1
+
+            async def build_context(self, event) -> MessageContext:  # type: ignore[no-untyped-def]
+                return event
+
+            async def run_forever(self) -> None:
+                assert self._new_handler is not None
+                await self._new_handler(
+                    MessageContext(
+                        chat_id=-100,
+                        message_id=9101,
+                        reply_to_msg_id=None,
+                        sender_id=999,
+                        text=status_text,
+                        ts=datetime.now(timezone.utc),
+                        is_reply=False,
+                        is_reply_to_me=False,
+                    )
+                )
+                water_mid = sent_ids[".灵树灌溉"]
+                await self._new_handler(
+                    MessageContext(
+                        chat_id=-100,
+                        message_id=9102,
+                        reply_to_msg_id=water_mid,
+                        sender_id=999,
+                        text=feedback_text,
+                        ts=datetime.now(timezone.utc),
+                        is_reply=True,
+                        is_reply_to_me=True,
+                    )
+                )
+                await asyncio.sleep(0.01)
+
+            async def stop(self) -> None:
+                return None
+
+        class FakeSender:
+            def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                self.kwargs = kwargs
+
+            async def send(
+                self,
+                plugin: str,
+                text: str,
+                reply_to_topic: bool,
+                *,
+                reply_to_msg_id: int | None = None,
+                identity_key: str | None = None,
+                send_as: str | None = None,
+            ) -> int | None:
+                _ = (reply_to_topic, reply_to_msg_id)
+                sends.append((plugin, text, identity_key, send_as))
+                msg_id = 8100 + len(sends)
+                sent_ids[text] = msg_id
+                return msg_id
+
+        def fake_build_plugins(config, logger):  # type: ignore[no-untyped-def]
+            return [LuoyunzongPlugin(config, logger)]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "app.sqlite3"
+            repo = AccountRepository(str(path), logging.getLogger("test"))
+            config = _dummy_config(
+                enable_message_archive=False,
+                identity_profiles=(
+                    IdentityProfile(
+                        key="main",
+                        kind="main",
+                        my_name="寒山子",
+                        switch_target="主魂",
+                        display_name="主魂",
+                        config_overrides={"enable_luoyunzong": False},
+                    ),
+                    IdentityProfile(
+                        key="luoyun_channel",
+                        kind="channel",
+                        my_name="落云频道",
+                        switch_target="",
+                        display_name="落云频道",
+                        send_as="@luoyun_channel",
+                        config_overrides={
+                            "enable_luoyunzong": True,
+                            "luoyunzong_watering_strategy": "always",
+                            "luoyunzong_status_interval_seconds": 600,
+                        },
+                    ),
+                ),
+            )
+            record = repo.create_account("alpha", config, enabled=True)
+            system_config = SystemConfig(app_db_path=str(path), log_dir=str(Path(tmpdir) / "logs"))
+            runner = AccountRunner(record, system_config)
+
+            with patch("xiuxian_bot.runtime.Scheduler", FakeScheduler), patch(
+                "xiuxian_bot.runtime.ReliableSender",
+                FakeSender,
+            ), patch("xiuxian_bot.runtime.TGAdapter", FakeAdapter), patch(
+                "xiuxian_bot.runtime.build_plugins",
+                side_effect=fake_build_plugins,
+            ):
+                await runner.start()
+                await asyncio.sleep(0.05)
+                await runner.stop()
+
+            self.assertEqual(
+                sends,
+                [("luoyunzong", ".灵树灌溉", "luoyun_channel", "@luoyun_channel")],
+            )
+            state = SQLiteStateStore(str(path), account_id=f"{record.id}:luoyun_channel")
+            channel_state = state.load_state("luoyunzong")
+            state.close()
+            self.assertIn("watering_next_at", channel_state)
+            self.assertNotIn(("__identity__", ".切换 主魂", None, None), sends)
+            repo.close()
+
     async def test_account_runner_respects_plugin_auto_return_veto(self) -> None:
         from xiuxian_bot.runtime import AccountRunner
 
@@ -2014,6 +2321,200 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(main_state.get("guanxing_claim_active", False))
             repo.close()
 
+    async def test_guanxing_channel_identity_sends_as_without_switching(self) -> None:
+        from xiuxian_bot.plugins.xinggong import AutoXinggongPlugin
+        from xiuxian_bot.runtime import AccountRunner
+
+        sends: list[tuple[str, str, str | None, str | None, int | None]] = []
+        sent_ids: dict[str, int] = {}
+        scheduled_shift_actions: list[object] = []
+        base_now = datetime(2026, 5, 17, 13, 0, 0)
+
+        class FrozenDateTime(datetime):
+            current = base_now
+
+            @classmethod
+            def now(cls, tz=None):  # type: ignore[no-untyped-def]
+                if tz is not None:
+                    return cls.current.replace(tzinfo=tz)
+                return cls.current
+
+        class FakeScheduler:
+            def __init__(self, logger) -> None:  # type: ignore[no-untyped-def]
+                self.logger = logger
+
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                _ = delay_seconds
+                if key == "channel:xinggong.guanxing.preview":
+                    await action()
+                elif key == "channel:xinggong.guanxing.shift":
+                    scheduled_shift_actions.append(action)
+
+            async def cancel_all(self) -> None:
+                return None
+
+        class FakeAdapter:
+            def __init__(self, config, logger, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                _ = (config, logger, kwargs)
+                self.me_id = 1
+                self._new_handler = None
+
+            def on_new_message(self, handler) -> None:  # type: ignore[no-untyped-def]
+                self._new_handler = handler
+
+            def on_message_edited(self, handler) -> None:  # type: ignore[no-untyped-def]
+                _ = handler
+
+            async def start(self) -> None:
+                return None
+
+            async def send_message(self, *_args, **_kwargs) -> int | None:  # type: ignore[no-untyped-def]
+                return 1
+
+            async def build_context(self, event) -> MessageContext:  # type: ignore[no-untyped-def]
+                return event
+
+            async def run_forever(self) -> None:
+                assert self._new_handler is not None
+                await self._new_handler(
+                    MessageContext(
+                        chat_id=-100,
+                        message_id=9201,
+                        reply_to_msg_id=123,
+                        sender_id=999,
+                        text=(
+                            "【星盘显化】@other 闭目凝神，推演天机...\n"
+                            "下一次天道演化将是：【Good·封魔裂隙回响】\n"
+                            "当前天命所归：@someone"
+                        ),
+                        ts=FrozenDateTime.now(timezone.utc),
+                        is_reply=True,
+                        is_reply_to_me=False,
+                    )
+                )
+                guanxing_mid = sent_ids[".观星"]
+                await self._new_handler(
+                    MessageContext(
+                        chat_id=-100,
+                        message_id=9202,
+                        reply_to_msg_id=guanxing_mid,
+                        sender_id=999,
+                        text=(
+                            "【星盘显化】@落云频道 闭目凝神，推演天机...\n"
+                            "下一次天道演化将是：【Bad·封魔裂隙回响】\n"
+                            "当前天命所归：@someone"
+                        ),
+                        ts=FrozenDateTime.now(timezone.utc),
+                        is_reply=True,
+                        is_reply_to_me=True,
+                    )
+                )
+                FrozenDateTime.current = base_now + timedelta(seconds=4)
+                if len(scheduled_shift_actions) != 1:
+                    raise AssertionError("expected one scheduled guanxing shift action")
+                await scheduled_shift_actions[0]()
+                await asyncio.sleep(0.01)
+
+            async def stop(self) -> None:
+                return None
+
+        class FakeSender:
+            def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                self.kwargs = kwargs
+
+            async def send(
+                self,
+                plugin: str,
+                text: str,
+                reply_to_topic: bool,
+                *,
+                reply_to_msg_id: int | None = None,
+                identity_key: str | None = None,
+                send_as: str | None = None,
+            ) -> int | None:
+                _ = reply_to_topic
+                sends.append((plugin, text, identity_key, send_as, reply_to_msg_id))
+                msg_id = 8200 + len(sends)
+                sent_ids[text] = msg_id
+                return msg_id
+
+        def fake_build_plugins(config, logger):  # type: ignore[no-untyped-def]
+            return [AutoXinggongPlugin(config, logger)]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "app.sqlite3"
+            repo = AccountRepository(str(path), logging.getLogger("test"))
+            config = _dummy_config(
+                enable_message_archive=False,
+                enable_xinggong=False,
+                xinggong_guanxing_watch_events="封魔裂隙回响",
+                xinggong_guanxing_target_username="salt9527",
+                xinggong_guanxing_preview_advance_seconds=10,
+                xinggong_guanxing_shift_advance_seconds=1,
+                identity_profiles=(
+                    IdentityProfile(
+                        key="main",
+                        kind="main",
+                        my_name="寒山子",
+                        switch_target="主魂",
+                        display_name="主魂",
+                        config_overrides={"enable_xinggong": False},
+                    ),
+                    IdentityProfile(
+                        key="channel",
+                        kind="channel",
+                        my_name="落云频道",
+                        switch_target="",
+                        display_name="落云频道",
+                        send_as="@xinggong_channel",
+                        config_overrides={
+                            "enable_xinggong": True,
+                            "enable_xinggong_guanxing": True,
+                        },
+                    ),
+                ),
+            )
+            record = repo.create_account("alpha", config, enabled=True)
+            system_config = SystemConfig(app_db_path=str(path), log_dir=str(Path(tmpdir) / "logs"))
+            runner = AccountRunner(record, system_config)
+
+            with patch("xiuxian_bot.runtime.Scheduler", FakeScheduler), patch(
+                "xiuxian_bot.runtime.ReliableSender",
+                FakeSender,
+            ), patch("xiuxian_bot.runtime.TGAdapter", FakeAdapter), patch(
+                "xiuxian_bot.runtime.build_plugins",
+                side_effect=fake_build_plugins,
+            ), patch(
+                "xiuxian_bot.plugins.xinggong.datetime",
+                FrozenDateTime,
+            ), patch.object(
+                AutoXinggongPlugin,
+                "_should_ignore_external_guanxing_preview",
+                return_value=False,
+            ), patch.object(
+                AutoXinggongPlugin,
+                "_next_guanxing_settlement_at",
+                lambda self, now: now + timedelta(seconds=5),
+            ):
+                await runner.start()
+                await asyncio.sleep(0.05)
+                await runner.stop()
+
+            self.assertEqual(
+                sends,
+                [
+                    ("xinggong", ".观星", "channel", "@xinggong_channel", None),
+                    (
+                        "xinggong",
+                        ".改换星移 @salt9527",
+                        "channel",
+                        "@xinggong_channel",
+                        9202,
+                    ),
+                ],
+            )
+            repo.close()
+
     async def test_account_runner_serializes_identity_switch_and_send(self) -> None:
         from xiuxian_bot.runtime import AccountRunner
 
@@ -2418,6 +2919,7 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
     async def test_login_and_create_account(self) -> None:
         import httpx
 
+        from xiuxian_bot.tg_adapter import SendAsOption
         from xiuxian_bot.web import create_app
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2438,10 +2940,33 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
             )
             fake_manager = self._fake_manager_cls(Path(system_config.log_dir))
 
+            async def fake_list_send_as_options(config, logger):  # type: ignore[no-untyped-def]
+                _ = logger
+                self.assertEqual(config.game_chat_id, -100123)
+                self.assertEqual(config.tg_session_name, "session-bot-1")
+                return [
+                    SendAsOption(
+                        value="@luoyun_channel",
+                        label="落云频道 (@luoyun_channel)",
+                        peer_id=-100123456,
+                        username="luoyun_channel",
+                        kind="channel",
+                    ),
+                    SendAsOption(
+                        value="-1000000002345",
+                        label="私密频道 (-1000000002345)",
+                        peer_id=-1000000002345,
+                        kind="channel",
+                    ),
+                ]
+
             with patch("xiuxian_bot.web.SystemConfig.load", return_value=system_config), patch(
                 "xiuxian_bot.web.AccountRepository.ensure_legacy_account",
                 return_value=None,
-            ), patch("xiuxian_bot.web.RunnerManager", fake_manager):
+            ), patch("xiuxian_bot.web.RunnerManager", fake_manager), patch(
+                "xiuxian_bot.web.list_send_as_options",
+                fake_list_send_as_options,
+            ):
                 app = create_app()
                 async with app.router.lifespan_context(app):
                     transport = httpx.ASGITransport(app=app)
@@ -2478,13 +3003,14 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                                 "auto_return_main_delay_seconds": "120",
                                 "status_command": ".状态",
                                 "status_identity_header_keyword": "修士状态",
-                                "identity_key": ["main", "ruifengzi"],
-                                "identity_kind": ["main", "avatar"],
-                                "identity_my_name": ["BotOne", "锐锋子"],
-                                "identity_switch_target": ["主魂", "锐锋子"],
-                                "identity_display_name": ["主魂", "锐锋子"],
-                                "identity_tg_username": ["salt9527", ""],
-                                "identity_game_id": ["", "7467781636"],
+                                "identity_key": ["main", "ruifengzi", "luoyun_channel"],
+                                "identity_kind": ["main", "avatar", "channel"],
+                                "identity_my_name": ["BotOne", "锐锋子", "频道子"],
+                                "identity_switch_target": ["主魂", "锐锋子", ""],
+                                "identity_display_name": ["主魂", "锐锋子", "频道子"],
+                                "identity_tg_username": ["salt9527", "", ""],
+                                "identity_game_id": ["", "7467781636", ""],
+                                "identity_send_as": ["", "", "@luoyun_channel"],
                                 "identity_override_enable_biguan": ["inherit", "off"],
                                 "identity_override_enable_garden": ["inherit", "inherit"],
                                 "identity_override_enable_xinggong": ["inherit", "inherit"],
@@ -2603,9 +3129,37 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         self.assertIn("身份配置", edit_page.text)
                         self.assertIn("identity-tabs", edit_page.text)
                         self.assertIn("身份插件配置", edit_page.text)
+                        self.assertIn("发送频道 send_as", edit_page.text)
+                        self.assertIn("获取频道", edit_page.text)
+                        self.assertIn("/accounts/1/send-as-options", edit_page.text)
+                        self.assertIn("频道身份", edit_page.text)
                         self.assertIn("继承账号全局", edit_page.text)
-                        self.assertIn("新增化身", edit_page.text)
+                        self.assertIn("新增身份", edit_page.text)
                         self.assertNotIn("身份组 JSON", edit_page.text)
+
+                        send_as_response = await client.get("/accounts/1/send-as-options")
+                        self.assertEqual(send_as_response.status_code, 200)
+                        self.assertEqual(
+                            send_as_response.json()["options"],
+                            [
+                                {
+                                    "value": "@luoyun_channel",
+                                    "label": "落云频道 (@luoyun_channel)",
+                                    "peer_id": -100123456,
+                                    "username": "luoyun_channel",
+                                    "kind": "channel",
+                                    "premium_required": False,
+                                },
+                                {
+                                    "value": "-1000000002345",
+                                    "label": "私密频道 (-1000000002345)",
+                                    "peer_id": -1000000002345,
+                                    "username": "",
+                                    "kind": "channel",
+                                    "premium_required": False,
+                                },
+                            ],
+                        )
 
                         stored = app.state.repository.get_account(1)
                         self.assertIsNotNone(stored)
@@ -2631,6 +3185,11 @@ class TestWebApp(unittest.IsolatedAsyncioTestCase):
                         assert avatar is not None
                         self.assertEqual(avatar.my_name, "锐锋子")
                         self.assertEqual(avatar.game_id, "7467781636")
+                        channel = stored.config.identity_by_key("luoyun_channel")
+                        self.assertIsNotNone(channel)
+                        assert channel is not None
+                        self.assertTrue(channel.is_channel)
+                        self.assertEqual(channel.send_as, "@luoyun_channel")
                         self.assertEqual(
                             avatar.config_overrides,
                             {

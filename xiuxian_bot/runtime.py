@@ -482,6 +482,17 @@ class AccountRunner:
         ) -> int | None:
             target_key = identity_key or identity_switch.active_identity_key
             runtime = runtimes[target_key]
+            identity = runtime.config.active_identity
+            is_channel_identity = identity.is_channel
+            send_as = identity.send_as.strip() if is_channel_identity else ""
+            if is_channel_identity and not send_as:
+                self._logger.warning(
+                    "channel_identity_missing_send_as identity=%s plugin=%s text=%s",
+                    target_key,
+                    plugin,
+                    text,
+                )
+                return None
             xinggong = runtime.xinggong
             while xinggong is not None and getattr(xinggong, "enabled", False):
                 wait_seconds = xinggong.send_block_delay_seconds(plugin, text)
@@ -497,7 +508,7 @@ class AccountRunner:
                 await asyncio.sleep(wait_seconds)
 
             async with identity_send_lock:
-                if not await identity_switch.ensure_identity(target_key):
+                if not is_channel_identity and not await identity_switch.ensure_identity(target_key):
                     self._logger.warning("identity_switch_failed target=%s plugin=%s text=%s", target_key, plugin, text)
                     return None
                 pause_message = _current_pause_message() if target_key == identity_switch.active_identity_key else None
@@ -505,12 +516,17 @@ class AccountRunner:
                     await _enter_pause_mode(pause_message)
                     self._logger.warning("send_suppressed_for_pause plugin=%s text=%s", plugin, text)
                     return None
+                send_kwargs = {
+                    "reply_to_msg_id": reply_to_msg_id,
+                    "identity_key": target_key,
+                }
+                if send_as:
+                    send_kwargs["send_as"] = send_as
                 mid = await sender.send(
                     plugin,
                     text,
                     bool(reply_to_topic and runtime.config.send_to_topic),
-                    reply_to_msg_id=reply_to_msg_id,
-                    identity_key=target_key,
+                    **send_kwargs,
                 )
                 _remember_sent(mid, identity_key=target_key, plugin=plugin)
                 random_text = runtime.random_text
@@ -520,11 +536,14 @@ class AccountRunner:
                     if callable(next_message) and callable(mark_sent):
                         random_text_message = next_message()
                         if isinstance(random_text_message, str) and random_text_message.strip():
+                            random_send_kwargs = {"identity_key": target_key}
+                            if send_as:
+                                random_send_kwargs["send_as"] = send_as
                             random_mid = await sender.send(
                                 "random_text",
                                 random_text_message.strip(),
                                 bool(runtime.config.send_to_topic),
-                                identity_key=target_key,
+                                **random_send_kwargs,
                             )
                             if random_mid is not None:
                                 _remember_sent(
@@ -536,6 +555,7 @@ class AccountRunner:
                 if (
                     mid is not None
                     and target_key != "main"
+                    and not is_channel_identity
                     and base_config.auto_return_main_after_avatar_action
                     and base_config.identity_by_key("main") is not None
                     and _should_auto_return_after_send(runtime, plugin, text)

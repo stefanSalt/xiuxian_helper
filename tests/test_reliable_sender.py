@@ -55,6 +55,32 @@ class TestReliableSender(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(send_times, [0.0, 10.0])
 
+    async def test_passes_send_as_to_transport_when_present(self) -> None:
+        seen: list[str | None] = []
+
+        async def _send_message(
+            text: str,
+            *,
+            reply_to_topic: bool,
+            reply_to_msg_id=None,
+            send_as=None,
+        ) -> int | None:
+            _ = (text, reply_to_topic, reply_to_msg_id)
+            seen.append(send_as)
+            return 1
+
+        sender = ReliableSender(
+            send_message=_send_message,
+            limiter=RateLimiter(global_per_minute=60, plugin_per_minute=60),
+            logger=_test_logger(),
+            dry_run=False,
+            min_interval_seconds=0,
+        )
+
+        await sender.send("a", ".one", True, send_as="@luoyun_channel")
+
+        self.assertEqual(seen, ["@luoyun_channel"])
+
     async def test_retries_wait_error_until_success(self) -> None:
         clock = _FakeClock()
         attempts = 0

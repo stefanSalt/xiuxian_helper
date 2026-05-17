@@ -153,6 +153,7 @@ class IdentityProfile:
     display_name: str = ""
     game_id: str = ""
     tg_username: str = ""
+    send_as: str = ""
     config_overrides: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -162,6 +163,10 @@ class IdentityProfile:
     @property
     def is_main(self) -> bool:
         return self.kind == "main"
+
+    @property
+    def is_channel(self) -> bool:
+        return self.kind == "channel"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -175,6 +180,7 @@ class IdentityProfile:
             self.display_name,
             self.game_id,
             self.tg_username,
+            self.send_as,
         ):
             normalized = normalize_match_text(value)
             if normalized and normalized not in tokens:
@@ -188,18 +194,26 @@ class IdentityProfile:
         display_name = str(data.get("display_name", "")).strip()
         game_id = str(data.get("game_id", "")).strip()
         tg_username = str(data.get("tg_username", "")).strip().lstrip("@")
+        send_as = str(data.get("send_as", "")).strip()
+        parsed_kind = str(data.get("kind", kind)).strip() or kind
         key = _parse_identity_key(
             data.get("key"),
-            fallback=_parse_identity_key(switch_target or my_name or game_id or display_name, fallback=fallback_key),
+            fallback=_parse_identity_key(
+                switch_target or my_name or game_id or display_name or send_as,
+                fallback=fallback_key,
+            ),
         )
+        if parsed_kind == "channel" and not send_as:
+            raise ValueError(f"Channel identity {key} requires send_as")
         return IdentityProfile(
             key=key,
-            kind=str(data.get("kind", kind)).strip() or kind,
+            kind=parsed_kind,
             my_name=my_name,
             switch_target=switch_target,
             display_name=display_name,
             game_id=game_id,
             tg_username=tg_username,
+            send_as=send_as,
             config_overrides=_parse_mapping(data.get("config_overrides"), "config_overrides"),
         )
 
@@ -468,9 +482,13 @@ class Config:
         mentions: list[str] = list(self.all_identity_names)
         for identity in self.identities:
             username = identity.tg_username.strip().lstrip("@")
-            if not username:
-                continue
-            for candidate in (username, f"@{username}"):
+            send_as = identity.send_as.strip().lstrip("@")
+            candidates = []
+            if username:
+                candidates.extend((username, f"@{username}"))
+            if send_as:
+                candidates.extend((send_as, f"@{send_as}"))
+            for candidate in candidates:
                 if candidate not in mentions:
                     mentions.append(candidate)
         return tuple(mentions)
