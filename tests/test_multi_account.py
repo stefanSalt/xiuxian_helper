@@ -881,13 +881,25 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
 
             async def run_forever(self) -> None:
                 assert self._new_handler is not None
+                first_invite = MessageContext(
+                    chat_id=-100,
+                    message_id=3301,
+                    reply_to_msg_id=123,
+                    sender_id=999,
+                    text="【周天星斗大阵-启】\n【星宫】弟子 锐锋子 正在布设大阵，尚需1 位同门相助!",
+                    ts=datetime.now(timezone.utc),
+                    is_reply=False,
+                    is_reply_to_me=False,
+                )
+                await self._new_handler(first_invite)
+                await self._new_handler(first_invite)
                 await self._new_handler(
                     MessageContext(
                         chat_id=-100,
-                        message_id=3301,
-                        reply_to_msg_id=123,
-                        sender_id=999,
-                        text="【周天星斗大阵-启】\n【星宫】弟子 锐锋子 正在布设大阵，尚需1 位同门相助!",
+                        message_id=3302,
+                        reply_to_msg_id=124,
+                        sender_id=998,
+                        text="【周天星斗大阵-启】\n【星宫】弟子 南陇侯 正在布设大阵，尚需1 位同门相助!",
                         ts=datetime.now(timezone.utc),
                         is_reply=False,
                         is_reply_to_me=False,
@@ -910,8 +922,9 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
                 *,
                 reply_to_msg_id: int | None = None,
                 identity_key: str | None = None,
+                send_as: str | None = None,
             ) -> int | None:
-                _ = (reply_to_topic, reply_to_msg_id)
+                _ = (reply_to_topic, reply_to_msg_id, send_as)
                 sends.append((plugin, text, identity_key))
                 return 1000 + len(sends)
 
@@ -922,6 +935,10 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
             def __init__(self, config, logger) -> None:  # type: ignore[no-untyped-def]
                 self.config = config
                 self.logger = logger
+
+            def send_block_delay_seconds(self, plugin: str, text: str) -> float:
+                _ = (plugin, text)
+                return 0.0
 
             async def on_message(self, ctx: MessageContext):  # type: ignore[no-untyped-def]
                 if "周天星斗大阵-启" not in ctx.text:
@@ -961,6 +978,14 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
                         switch_target="锐锋子",
                         display_name="锐锋子",
                     ),
+                    IdentityProfile(
+                        key="channel",
+                        kind="channel",
+                        my_name="频道子",
+                        switch_target="",
+                        display_name="频道子",
+                        send_as="@xinggong_channel",
+                    ),
                 ),
             )
             record = repo.create_account("alpha", config, enabled=True)
@@ -976,7 +1001,10 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
             ):
                 await runner.start()
                 await asyncio.sleep(0.05)
-                self.assertEqual(sends, [("xinggong", ".助阵", "main")])
+                self.assertEqual(
+                    sends,
+                    [("xinggong", ".助阵", "main"), ("xinggong", ".助阵", "main")],
+                )
                 await runner.stop()
 
             repo.close()
@@ -1063,6 +1091,10 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
             def __init__(self, config, logger) -> None:  # type: ignore[no-untyped-def]
                 self.config = config
                 self.logger = logger
+
+            def send_block_delay_seconds(self, plugin: str, text: str) -> float:
+                _ = (plugin, text)
+                return 0.0
 
             async def bootstrap(self, scheduler, send) -> None:  # type: ignore[no-untyped-def]
                 _ = scheduler

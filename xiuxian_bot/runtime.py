@@ -417,6 +417,9 @@ class AccountRunner:
 
         recent_sent_ids: deque[int] = deque(maxlen=50)
         recent_sent_bindings: dict[int, _SentMessageBinding] = {}
+        xinggong_qizhen_assisted_invite_ids: deque[int] = deque(maxlen=100)
+        xinggong_qizhen_assisted_invite_id_set: set[int] = set()
+        xinggong_qizhen_assist_lock = asyncio.Lock()
         pause_mode_active = False
         identity_send_lock = asyncio.Lock()
 
@@ -453,6 +456,15 @@ class AccountRunner:
             if message_id is None:
                 return None
             return recent_sent_bindings.get(message_id)
+
+        def _remember_xinggong_qizhen_assist(message_id: int | None) -> None:
+            if message_id is None or message_id in xinggong_qizhen_assisted_invite_id_set:
+                return
+            if len(xinggong_qizhen_assisted_invite_ids) == xinggong_qizhen_assisted_invite_ids.maxlen:
+                old = xinggong_qizhen_assisted_invite_ids.popleft()
+                xinggong_qizhen_assisted_invite_id_set.discard(old)
+            xinggong_qizhen_assisted_invite_ids.append(message_id)
+            xinggong_qizhen_assisted_invite_id_set.add(message_id)
 
         def _should_auto_return_after_send(runtime: _IdentityRuntime, plugin: str, text: str) -> bool:
             plugin_obj = next(
@@ -701,18 +713,21 @@ class AccountRunner:
             return candidates[0] if len(candidates) == 1 else None
 
         async def _dispatch_xinggong_qizhen_invite(ctx: MessageContext) -> list[tuple[SendAction, str]]:
-            action_items: list[tuple[SendAction, str]] = []
-            for identity in base_config.identities:
-                candidate = runtimes.get(identity.key)
-                if candidate is None:
-                    continue
-                plugin = candidate.xinggong
-                if plugin is None or not getattr(plugin, "enabled", False):
-                    continue
-                actions = await plugin.on_message(ctx)
-                if actions:
-                    action_items.extend((action, candidate.identity_key) for action in actions)
-            return action_items
+            async with xinggong_qizhen_assist_lock:
+                if ctx.message_id in xinggong_qizhen_assisted_invite_id_set:
+                    return []
+                for identity in base_config.identities:
+                    candidate = runtimes.get(identity.key)
+                    if candidate is None:
+                        continue
+                    plugin = candidate.xinggong
+                    if plugin is None or not getattr(plugin, "enabled", False):
+                        continue
+                    actions = await plugin.on_message(ctx)
+                    if actions:
+                        _remember_xinggong_qizhen_assist(ctx.message_id)
+                        return [(action, candidate.identity_key) for action in actions]
+            return []
 
         async def _dispatch_luoyunzong_status(
             ctx: MessageContext,
