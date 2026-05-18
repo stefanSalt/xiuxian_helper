@@ -109,6 +109,10 @@ def _is_luoyunzong_public_guard_route_candidate(text: str) -> bool:
     )
 
 
+def _is_xinggong_qizhen_invite_route_candidate(text: str) -> bool:
+    return "周天星斗大阵-启" in text
+
+
 def _extract_topic_id_from_event(event) -> int | None:
     message = getattr(event, "message", None)
     reply_to = getattr(message, "reply_to", None)
@@ -696,6 +700,20 @@ class AccountRunner:
                     candidates.append(runtime)
             return candidates[0] if len(candidates) == 1 else None
 
+        async def _dispatch_xinggong_qizhen_invite(ctx: MessageContext) -> list[tuple[SendAction, str]]:
+            action_items: list[tuple[SendAction, str]] = []
+            for identity in base_config.identities:
+                candidate = runtimes.get(identity.key)
+                if candidate is None:
+                    continue
+                plugin = candidate.xinggong
+                if plugin is None or not getattr(plugin, "enabled", False):
+                    continue
+                actions = await plugin.on_message(ctx)
+                if actions:
+                    action_items.extend((action, candidate.identity_key) for action in actions)
+            return action_items
+
         async def _dispatch_luoyunzong_status(
             ctx: MessageContext,
             *,
@@ -725,10 +743,12 @@ class AccountRunner:
             identity_switch.observe(ctx)
             await _archive_message_event(event, ctx, event_type)
             in_scope = _in_scope(base_config, ctx.text, ctx.reply_to_msg_id, ctx.is_reply_to_me)
+            is_bound_reply = _binding_for_message_id(ctx.reply_to_msg_id) is not None
             is_luoyunzong_status = _is_luoyunzong_status_route_candidate(ctx.text)
             is_luoyunzong_public_guard = _is_luoyunzong_public_guard_route_candidate(ctx.text)
             is_luoyunzong_event = is_luoyunzong_status or is_luoyunzong_public_guard
-            if not in_scope and not is_luoyunzong_event:
+            is_xinggong_qizhen_invite = _is_xinggong_qizhen_invite_route_candidate(ctx.text)
+            if not in_scope and not is_bound_reply and not is_luoyunzong_event and not is_xinggong_qizhen_invite:
                 return
             runtime = _runtime_for_context(ctx)
             if in_scope:
@@ -756,6 +776,8 @@ class AccountRunner:
                     ctx,
                     personal_runtime=runtime if in_scope and is_luoyunzong_status else None,
                 )
+            elif is_xinggong_qizhen_invite:
+                action_items = await _dispatch_xinggong_qizhen_invite(ctx)
             else:
                 actions = await runtime.dispatcher.dispatch(ctx)
                 action_items = [(action, runtime.identity_key) for action in actions]

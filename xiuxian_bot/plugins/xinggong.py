@@ -248,12 +248,6 @@ class AutoXinggongPlugin:
             or self._matches_identity_text(normalized_text, self._config.active_identity)
         )
 
-    def _matches_any_configured_identity_text(self, normalized_text: str) -> bool:
-        return any(
-            self._matches_identity_text(normalized_text, identity)
-            for identity in self._config.identities
-        )
-
     def _normalize_username(self, raw: str) -> str:
         value = (raw or "").strip()
         if not value:
@@ -1000,8 +994,6 @@ class AutoXinggongPlugin:
                 self._qizhen_last_invite_msg_id = ctx.message_id
                 self._qizhen_last_invite_slot = self._qizhen_pending_slot
                 self._save_state()
-            elif self._matches_any_configured_identity_text(normalized_text):
-                return None
             else:
                 # Others' invite -> try assist (no reply needed per your group rules).
                 if self._assist_blocked_until is not None and now < self._assist_blocked_until:

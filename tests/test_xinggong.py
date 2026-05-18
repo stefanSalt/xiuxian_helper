@@ -682,7 +682,7 @@ class TestXinggongPlugin(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(getattr(plugin, "_qizhen_last_invite_msg_id"), 31)
         self.assertEqual(getattr(plugin, "_qizhen_last_invite_slot"), 1)
 
-    async def test_qizhen_invite_from_same_account_avatar_is_not_assisted_by_main(self) -> None:
+    async def test_qizhen_invite_from_same_account_avatar_can_be_assisted_by_main(self) -> None:
         config = _dummy_config(
             my_name="寒山子",
             identity_profiles=(
@@ -717,7 +717,8 @@ class TestXinggongPlugin(unittest.IsolatedAsyncioTestCase):
         )
         actions = await plugin.on_message(invite)
 
-        self.assertIsNone(actions)
+        assert actions is not None
+        self.assertEqual([action.text for action in actions], [".助阵"])
         self.assertIsNone(getattr(plugin, "_qizhen_last_invite_msg_id"))
 
     async def test_qizhen_invite_from_other_player_still_triggers_assist(self) -> None:
@@ -799,6 +800,56 @@ class TestXinggongPlugin(unittest.IsolatedAsyncioTestCase):
         # Remaining seconds (3723) + buffer (>=5s) with a bit of timing slack.
         self.assertGreater(delta, 3723)
         self.assertLess(delta, 3800)
+
+    async def test_qizhen_cooldown_reply_for_channel_identity_without_reply_to_me(self) -> None:
+        base_config = _dummy_config(
+            my_name="寒山子",
+            identity_profiles=(
+                IdentityProfile(
+                    key="main",
+                    kind="main",
+                    my_name="寒山子",
+                    switch_target="主魂",
+                    display_name="主魂",
+                ),
+                IdentityProfile(
+                    key="channel",
+                    kind="channel",
+                    my_name="频道子",
+                    switch_target="",
+                    display_name="频道子",
+                    send_as="@xinggong_channel",
+                ),
+            ),
+        )
+        main_plugin = AutoXinggongPlugin(base_config.apply_identity("main"), logging.getLogger("test"))
+        channel_plugin = AutoXinggongPlugin(
+            base_config.apply_identity("channel"),
+            logging.getLogger("test"),
+        )
+        now = datetime.now()
+        setattr(channel_plugin, "_cycle_date", channel_plugin._cycle_date_for(now))  # type: ignore[attr-defined]
+        setattr(channel_plugin, "_qizhen_pending_slot", 1)
+        setattr(channel_plugin, "_qizhen_last_sent_at", now - timedelta(seconds=5))
+
+        ctx = MessageContext(
+            chat_id=-100,
+            message_id=24,
+            reply_to_msg_id=9001,
+            sender_id=999,
+            text="你刚刚参与过布阵，心神消耗巨大，请在 6小时38分钟6秒 后再次启阵。",
+            ts=datetime.now(timezone.utc),
+            is_reply=True,
+            is_reply_to_me=False,
+        )
+        await channel_plugin.on_message(ctx)
+
+        self.assertIsNone(getattr(main_plugin, "_qizhen_blocked_until"))
+        channel_blocked_until = getattr(channel_plugin, "_qizhen_blocked_until")
+        self.assertIsNotNone(channel_blocked_until)
+        delta = (channel_blocked_until - now).total_seconds()
+        self.assertGreater(delta, 23886)
+        self.assertLess(delta, 23910)
 
     async def test_qizhen_existing_invite_reply_waits_210_seconds(self) -> None:
         plugin = AutoXinggongPlugin(_dummy_config(), logging.getLogger("test"))

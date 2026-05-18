@@ -842,6 +842,284 @@ class TestRunnerManager(unittest.IsolatedAsyncioTestCase):
 
             repo.close()
 
+    async def test_account_runner_dispatches_qizhen_invite_to_other_identities(self) -> None:
+        from xiuxian_bot.runtime import AccountRunner
+
+        sends: list[tuple[str, str, str | None]] = []
+        stop_event = asyncio.Event()
+
+        class FakeScheduler:
+            def __init__(self, logger) -> None:  # type: ignore[no-untyped-def]
+                self.logger = logger
+
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                _ = (key, delay_seconds, action)
+
+            async def cancel_all(self) -> None:
+                return None
+
+        class FakeAdapter:
+            def __init__(self, config, logger, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                _ = (config, logger, kwargs)
+                self.me_id = 1
+                self._new_handler = None
+
+            def on_new_message(self, handler) -> None:  # type: ignore[no-untyped-def]
+                self._new_handler = handler
+
+            def on_message_edited(self, handler) -> None:  # type: ignore[no-untyped-def]
+                _ = handler
+
+            async def start(self) -> None:
+                return None
+
+            async def send_message(self, *_args, **_kwargs) -> int | None:  # type: ignore[no-untyped-def]
+                return 1
+
+            async def build_context(self, event) -> MessageContext:  # type: ignore[no-untyped-def]
+                return event
+
+            async def run_forever(self) -> None:
+                assert self._new_handler is not None
+                await self._new_handler(
+                    MessageContext(
+                        chat_id=-100,
+                        message_id=3301,
+                        reply_to_msg_id=123,
+                        sender_id=999,
+                        text="【周天星斗大阵-启】\n【星宫】弟子 锐锋子 正在布设大阵，尚需1 位同门相助!",
+                        ts=datetime.now(timezone.utc),
+                        is_reply=False,
+                        is_reply_to_me=False,
+                    )
+                )
+                await stop_event.wait()
+
+            async def stop(self) -> None:
+                stop_event.set()
+
+        class FakeSender:
+            def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                self.kwargs = kwargs
+
+            async def send(
+                self,
+                plugin: str,
+                text: str,
+                reply_to_topic: bool,
+                *,
+                reply_to_msg_id: int | None = None,
+                identity_key: str | None = None,
+            ) -> int | None:
+                _ = (reply_to_topic, reply_to_msg_id)
+                sends.append((plugin, text, identity_key))
+                return 1000 + len(sends)
+
+        class FakeXinggongPlugin:
+            name = "xinggong"
+            enabled = True
+
+            def __init__(self, config, logger) -> None:  # type: ignore[no-untyped-def]
+                self.config = config
+                self.logger = logger
+
+            async def on_message(self, ctx: MessageContext):  # type: ignore[no-untyped-def]
+                if "周天星斗大阵-启" not in ctx.text:
+                    return None
+                if self.config.my_name in ctx.text:
+                    return None
+                return [
+                    SendAction(
+                        plugin=self.name,
+                        text=".助阵",
+                        reply_to_topic=True,
+                        key=f"xinggong.zhuzhen.{self.config.active_identity_key}",
+                    )
+                ]
+
+        def fake_build_plugins(config, logger):  # type: ignore[no-untyped-def]
+            return [FakeXinggongPlugin(config, logger)]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "app.sqlite3"
+            repo = AccountRepository(str(path), logging.getLogger("test"))
+            config = _dummy_config(
+                my_name="寒山子",
+                enable_xinggong=True,
+                identity_profiles=(
+                    IdentityProfile(
+                        key="main",
+                        kind="main",
+                        my_name="寒山子",
+                        switch_target="主魂",
+                        display_name="主魂",
+                    ),
+                    IdentityProfile(
+                        key="avatar",
+                        kind="avatar",
+                        my_name="锐锋子",
+                        switch_target="锐锋子",
+                        display_name="锐锋子",
+                    ),
+                ),
+            )
+            record = repo.create_account("alpha", config, enabled=True)
+            system_config = SystemConfig(app_db_path=str(path), log_dir=str(Path(tmpdir) / "logs"))
+            runner = AccountRunner(record, system_config)
+
+            with patch("xiuxian_bot.runtime.Scheduler", FakeScheduler), patch(
+                "xiuxian_bot.runtime.ReliableSender",
+                FakeSender,
+            ), patch("xiuxian_bot.runtime.TGAdapter", FakeAdapter), patch(
+                "xiuxian_bot.runtime.build_plugins",
+                side_effect=fake_build_plugins,
+            ):
+                await runner.start()
+                await asyncio.sleep(0.05)
+                self.assertEqual(sends, [("xinggong", ".助阵", "main")])
+                await runner.stop()
+
+            repo.close()
+
+    async def test_account_runner_routes_channel_qizhen_cooldown_reply_by_sent_message(self) -> None:
+        from xiuxian_bot.runtime import AccountRunner
+
+        sends: list[tuple[str, str, str | None, str | None]] = []
+        cooldown_hits: list[str] = []
+        stop_event = asyncio.Event()
+
+        class FakeScheduler:
+            def __init__(self, logger) -> None:  # type: ignore[no-untyped-def]
+                self.logger = logger
+
+            async def schedule(self, *, key: str, delay_seconds: float, action) -> None:  # type: ignore[no-untyped-def]
+                _ = (key, delay_seconds, action)
+
+            async def cancel_all(self) -> None:
+                return None
+
+        class FakeAdapter:
+            def __init__(self, config, logger, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                _ = (config, logger, kwargs)
+                self.me_id = 1
+                self._new_handler = None
+
+            def on_new_message(self, handler) -> None:  # type: ignore[no-untyped-def]
+                self._new_handler = handler
+
+            def on_message_edited(self, handler) -> None:  # type: ignore[no-untyped-def]
+                _ = handler
+
+            async def start(self) -> None:
+                return None
+
+            async def send_message(self, *_args, **_kwargs) -> int | None:  # type: ignore[no-untyped-def]
+                return 1
+
+            async def build_context(self, event) -> MessageContext:  # type: ignore[no-untyped-def]
+                return event
+
+            async def run_forever(self) -> None:
+                assert self._new_handler is not None
+                await self._new_handler(
+                    MessageContext(
+                        chat_id=-100,
+                        message_id=7002,
+                        reply_to_msg_id=7001,
+                        sender_id=999,
+                        text="你刚刚参与过布阵，心神消耗巨大，请在 6小时38分钟6秒 后再次启阵。",
+                        ts=datetime.now(timezone.utc),
+                        is_reply=True,
+                        is_reply_to_me=False,
+                    )
+                )
+                await stop_event.wait()
+
+            async def stop(self) -> None:
+                stop_event.set()
+
+        class FakeSender:
+            def __init__(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+                self.kwargs = kwargs
+
+            async def send(
+                self,
+                plugin: str,
+                text: str,
+                reply_to_topic: bool,
+                *,
+                reply_to_msg_id: int | None = None,
+                identity_key: str | None = None,
+                send_as: str | None = None,
+            ) -> int | None:
+                _ = (reply_to_topic, reply_to_msg_id)
+                sends.append((plugin, text, identity_key, send_as))
+                return 7001 if text == ".启阵" else 7100 + len(sends)
+
+        class FakeXinggongPlugin:
+            name = "xinggong"
+            enabled = True
+
+            def __init__(self, config, logger) -> None:  # type: ignore[no-untyped-def]
+                self.config = config
+                self.logger = logger
+
+            async def bootstrap(self, scheduler, send) -> None:  # type: ignore[no-untyped-def]
+                _ = scheduler
+                if self.config.active_identity.is_channel:
+                    await send(self.name, ".启阵", True)
+
+            async def on_message(self, ctx: MessageContext):  # type: ignore[no-untyped-def]
+                if "再次启阵" in ctx.text:
+                    cooldown_hits.append(self.config.active_identity_key)
+                return None
+
+        def fake_build_plugins(config, logger):  # type: ignore[no-untyped-def]
+            return [FakeXinggongPlugin(config, logger)]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "app.sqlite3"
+            repo = AccountRepository(str(path), logging.getLogger("test"))
+            config = _dummy_config(
+                my_name="寒山子",
+                enable_xinggong=True,
+                identity_profiles=(
+                    IdentityProfile(
+                        key="main",
+                        kind="main",
+                        my_name="寒山子",
+                        switch_target="主魂",
+                        display_name="主魂",
+                    ),
+                    IdentityProfile(
+                        key="channel",
+                        kind="channel",
+                        my_name="频道子",
+                        switch_target="",
+                        display_name="频道子",
+                        send_as="@xinggong_channel",
+                    ),
+                ),
+            )
+            record = repo.create_account("alpha", config, enabled=True)
+            system_config = SystemConfig(app_db_path=str(path), log_dir=str(Path(tmpdir) / "logs"))
+            runner = AccountRunner(record, system_config)
+
+            with patch("xiuxian_bot.runtime.Scheduler", FakeScheduler), patch(
+                "xiuxian_bot.runtime.ReliableSender",
+                FakeSender,
+            ), patch("xiuxian_bot.runtime.TGAdapter", FakeAdapter), patch(
+                "xiuxian_bot.runtime.build_plugins",
+                side_effect=fake_build_plugins,
+            ):
+                await runner.start()
+                await asyncio.sleep(0.05)
+                self.assertEqual(sends, [("xinggong", ".启阵", "channel", "@xinggong_channel")])
+                self.assertEqual(cooldown_hits, ["channel"])
+                await runner.stop()
+
+            repo.close()
+
     async def test_account_runner_channel_identity_sends_as_without_switching(self) -> None:
         from xiuxian_bot.runtime import AccountRunner
 
