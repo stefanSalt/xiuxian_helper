@@ -23,6 +23,7 @@ from .plugins.daily import DailyPlugin
 from .plugins.garden import AutoGardenPlugin
 from .plugins.lingxiaogong import AutoLingxiaogongPlugin
 from .plugins.luoyunzong import LuoyunzongPlugin
+from .plugins.qiling import QilingPlugin
 from .plugins.random_event import AutoRandomEventPlugin
 from .plugins.random_text import RandomTextPlugin
 from .plugins.shiqie import ShiqiePlugin
@@ -43,6 +44,7 @@ class _FocusFilter(logging.Filter):
             msg.startswith(">>")
             or msg.startswith("<<")
             or msg.startswith("luoyunzong_")
+            or msg.startswith("qiling_")
             or msg.startswith("random_text_")
         )
 
@@ -242,6 +244,7 @@ def build_plugins(config: Config, logger: logging.Logger) -> list[object]:
         ShiqiePlugin(config, logger),
         WildExplorePlugin(config, logger),
         LuoyunzongPlugin(config, logger),
+        QilingPlugin(config, logger),
         AutoXinggongPlugin(config, logger),
         AutoYuanyingPlugin(config, logger),
         AutoZongmenPlugin(config, logger),

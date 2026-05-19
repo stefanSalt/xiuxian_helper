@@ -390,6 +390,14 @@ class Config:
     luoyunzong_linggen_refresh_seconds: int = 86400
     luoyunzong_harvest_suppress_seconds: int = 86400
 
+    # Qiling
+    enable_qiling: bool = False
+    qiling_artifact_names: str = ""
+    qiling_enable_touch: bool = True
+    qiling_enable_nurture: bool = True
+    qiling_enable_trial: bool = True
+    qiling_trial_route: str = "静修"
+
     # Xinggong sub-features
     enable_message_archive: bool = True
     enable_xinggong_wenan: bool = True
@@ -589,6 +597,9 @@ class Config:
             raise ValueError(
                 "luoyunzong_watering_strategy 必须是 match_linggen、always 或 match_need"
             )
+        qiling_trial_route = str(data.get("qiling_trial_route", "静修")).strip() or "静修"
+        if qiling_trial_route not in {"静修", "寻宝", "斗战"}:
+            raise ValueError("qiling_trial_route 必须是 静修、寻宝 或 斗战")
         parsed_random_text_min_interval = max(
             60,
             _parse_int(
@@ -786,6 +797,21 @@ class Config:
                     "luoyunzong_harvest_suppress_seconds",
                 ),
             ),
+            enable_qiling=_parse_bool(data.get("enable_qiling", False), "enable_qiling"),
+            qiling_artifact_names=str(data.get("qiling_artifact_names", "")).strip(),
+            qiling_enable_touch=_parse_bool(
+                data.get("qiling_enable_touch", True),
+                "qiling_enable_touch",
+            ),
+            qiling_enable_nurture=_parse_bool(
+                data.get("qiling_enable_nurture", True),
+                "qiling_enable_nurture",
+            ),
+            qiling_enable_trial=_parse_bool(
+                data.get("qiling_enable_trial", True),
+                "qiling_enable_trial",
+            ),
+            qiling_trial_route=qiling_trial_route,
             garden_seed_name=str(data.get("garden_seed_name", "清灵草种子")).strip() or "清灵草种子",
             garden_poll_interval_seconds=_parse_int(
                 data.get("garden_poll_interval_seconds", 3600),
@@ -1106,6 +1132,12 @@ class Config:
                 "LUOYUNZONG_HARVEST_SUPPRESS_SECONDS",
                 default=86400,
             ),
+            "enable_qiling": _get_env_bool("ENABLE_QILING", default=False),
+            "qiling_artifact_names": _get_env_str("QILING_ARTIFACT_NAMES", default=""),
+            "qiling_enable_touch": _get_env_bool("QILING_ENABLE_TOUCH", default=True),
+            "qiling_enable_nurture": _get_env_bool("QILING_ENABLE_NURTURE", default=True),
+            "qiling_enable_trial": _get_env_bool("QILING_ENABLE_TRIAL", default=True),
+            "qiling_trial_route": _get_env_str("QILING_TRIAL_ROUTE", default="静修"),
             "garden_seed_name": _get_env_str("GARDEN_SEED_NAME", default="清灵草种子"),
             "garden_poll_interval_seconds": _get_env_int(
                 "GARDEN_POLL_INTERVAL_SECONDS", default=3600
