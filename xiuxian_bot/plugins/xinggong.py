@@ -232,6 +232,7 @@ class AutoXinggongPlugin:
             identity.display_name,
             identity.game_id,
             identity.tg_username,
+            identity.send_as,
         ):
             normalized = normalize_match_text(value)
             if normalized and normalized not in tokens:

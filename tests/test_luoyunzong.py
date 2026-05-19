@@ -240,6 +240,26 @@ class TestLuoyunzongPlugin(unittest.IsolatedAsyncioTestCase):
             base_now + timedelta(seconds=86400),
         )
 
+    async def test_already_harvested_feedback_updates_harvest_state(self) -> None:
+        base_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+        plugin = LuoyunzongPlugin(
+            _dummy_config(),
+            logging.getLogger("test"),
+            now_fn=lambda: base_now,
+        )
+
+        actions = await plugin.on_message(_ctx(MATURE_STATUS))
+        assert actions is not None
+        await plugin.on_message(_ctx("你此轮已经采摘过灵果了，不可贪得无厌。"))
+        second_actions = await plugin.on_message(_ctx(MATURE_STATUS))
+
+        self.assertIsNone(second_actions)
+        self.assertIsNone(plugin._pending_action)  # type: ignore[attr-defined]
+        self.assertEqual(  # type: ignore[attr-defined]
+            plugin._harvest_suppress_until,
+            base_now + timedelta(seconds=86400),
+        )
+
     async def test_global_harvested_status_keeps_harvest_suppression_per_identity(self) -> None:
         base_now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
         plugin_a = LuoyunzongPlugin(

@@ -83,6 +83,7 @@ class LuoyunzongPlugin:
         self._linggen_refreshed_at: datetime | None = None
         self._watering_next_at: datetime | None = None
         self._harvest_suppress_until: datetime | None = None
+        self._harvest_suppress_source = ""
         self._guard_suppress_until: datetime | None = None
         self._pending_action: str | None = None
         self._pending_action_started_at: datetime | None = None
@@ -107,6 +108,7 @@ class LuoyunzongPlugin:
             self._linggen_refreshed_at = deserialize_datetime(state.get("linggen_refreshed_at"))
             self._watering_next_at = deserialize_datetime(state.get("watering_next_at"))
             self._harvest_suppress_until = deserialize_datetime(state.get("harvest_suppress_until"))
+            self._harvest_suppress_source = str(state.get("harvest_suppress_source", "") or "")
             self._guard_suppress_until = deserialize_datetime(state.get("guard_suppress_until"))
         self._load_global_state()
 
@@ -205,13 +207,14 @@ class LuoyunzongPlugin:
                 if isinstance(remaining_seconds, int)
                 else None,
                 refresh_default=False,
+                source="status",
             )
             self._clear_pending_action()
             await self._schedule_status(self._next_status_delay_seconds())
             self._log_status_decision(status, "already_harvested", "suppress")
             return None
 
-        if personal or not status["mature"]:
+        if not status["mature"] or (personal and self._harvest_suppress_source != "feedback"):
             self._clear_harvest_suppression()
 
         if self._pending_action is not None:
@@ -534,20 +537,27 @@ class LuoyunzongPlugin:
         remaining_seconds: int | None = None,
         *,
         refresh_default: bool = True,
+        source: str = "feedback",
     ) -> None:
         now = self._now()
+        updated = False
         if remaining_seconds is not None:
             self._harvest_suppress_until = now + timedelta(seconds=max(0, remaining_seconds))
+            updated = True
         elif refresh_default or not self._is_harvest_suppressed():
             self._harvest_suppress_until = now + timedelta(
                 seconds=self._harvest_suppress_seconds
             )
+            updated = True
+        if updated:
+            self._harvest_suppress_source = source
         self._save_state()
 
     def _clear_harvest_suppression(self) -> None:
         if self._harvest_suppress_until is None:
             return
         self._harvest_suppress_until = None
+        self._harvest_suppress_source = ""
         self._save_state()
 
     def _remember_global_status(self, status: dict[str, object]) -> None:
@@ -570,6 +580,7 @@ class LuoyunzongPlugin:
                 "linggen_refreshed_at": serialize_datetime(self._linggen_refreshed_at),
                 "watering_next_at": serialize_datetime(self._watering_next_at),
                 "harvest_suppress_until": serialize_datetime(self._harvest_suppress_until),
+                "harvest_suppress_source": self._harvest_suppress_source,
                 "guard_suppress_until": serialize_datetime(self._guard_suppress_until),
             },
         )
@@ -793,6 +804,8 @@ class LuoyunzongPlugin:
                 "守山成功",
                 "后再来守山",
                 "采摘灵果",
+                "已经采摘过灵果",
+                "不可贪得无厌",
                 "奖励已入袋",
             )
         )

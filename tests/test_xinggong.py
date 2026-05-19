@@ -721,6 +721,48 @@ class TestXinggongPlugin(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([action.text for action in actions], [".助阵"])
         self.assertIsNone(getattr(plugin, "_qizhen_last_invite_msg_id"))
 
+    async def test_qizhen_invite_matches_active_channel_send_as(self) -> None:
+        base_config = _dummy_config(
+            my_name="寒山子",
+            identity_profiles=(
+                IdentityProfile(
+                    key="main",
+                    kind="main",
+                    my_name="寒山子",
+                    switch_target="主魂",
+                    display_name="主魂",
+                ),
+                IdentityProfile(
+                    key="channel",
+                    kind="channel",
+                    my_name="",
+                    switch_target="",
+                    display_name="",
+                    send_as="@xinggong_channel",
+                ),
+            ),
+        )
+        plugin = AutoXinggongPlugin(base_config.apply_identity("channel"), logging.getLogger("test"))
+        now = datetime.now()
+        setattr(plugin, "_cycle_date", plugin._cycle_date_for(now))  # type: ignore[attr-defined]
+        setattr(plugin, "_qizhen_pending_slot", 1)
+
+        invite = MessageContext(
+            chat_id=-100,
+            message_id=34,
+            reply_to_msg_id=123,
+            sender_id=999,
+            text="【周天星斗大阵-启】\n【星宫】弟子 @xinggong_channel 正在布设大阵，尚需1 位同门相助!",
+            ts=datetime.now(timezone.utc),
+            is_reply=False,
+            is_reply_to_me=False,
+        )
+        actions = await plugin.on_message(invite)
+
+        self.assertIsNone(actions)
+        self.assertEqual(getattr(plugin, "_qizhen_last_invite_msg_id"), 34)
+        self.assertEqual(getattr(plugin, "_qizhen_last_invite_slot"), 1)
+
     async def test_qizhen_invite_from_other_player_still_triggers_assist(self) -> None:
         plugin = AutoXinggongPlugin(_dummy_config(), logging.getLogger("test"))
 
